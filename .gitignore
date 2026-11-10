@@ -1,0 +1,19 @@
+# Dependencies
+node_modules/
+dist/
+dist-ssr/
+
+# Rust / Tauri
+src-tauri/target/
+src-tauri/gen/
+src-tauri/WixTools/
+src-tauri/WebView2Loader.dll
+
+# Logs & OS files
+*.log
+.DS_Store
+Thumbs.db
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+
