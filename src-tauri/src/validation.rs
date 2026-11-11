@@ -1,5 +1,5 @@
 use std::net::IpAddr;
-use std::path::Path;
+use std::path::{Component, Path};
 
 use crate::error::{AppError, AppResult};
 use crate::models::{AppSettings, AuthMethod, HostInput};
@@ -142,6 +142,49 @@ pub fn validate_private_key_path(path_str: &str) -> AppResult<()> {
         ));
     }
     Ok(())
+}
+
+/// Validates a local file path used for SFTP upload or download.
+pub fn validate_local_transfer_path(path_str: &str) -> AppResult<()> {
+    let trimmed = path_str.trim();
+    if trimmed.is_empty() || trimmed.len() > 1024 {
+        return Err(AppError::Validation(
+            "Local file path must be between 1 and 1024 characters.".into(),
+        ));
+    }
+    if trimmed.contains('\0') {
+        return Err(AppError::Validation(
+            "Local file path contains null byte.".into(),
+        ));
+    }
+    let path = Path::new(trimmed);
+    if path.components().any(|c| matches!(c, Component::ParentDir)) {
+        return Err(AppError::Validation(
+            "Local file path must not contain parent directory traversal ('..').".into(),
+        ));
+    }
+    if path.is_dir() {
+        return Err(AppError::Validation(
+            "Local transfer path points to a directory, not a file.".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Sanitizes an untrusted filename returned by a remote SFTP server.
+/// Returns `None` for `.`, `..`, empty names, or names containing path separators/control chars.
+pub fn sanitize_remote_filename(name: &str) -> Option<String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() || trimmed == "." || trimmed == ".." {
+        return None;
+    }
+    if trimmed
+        .chars()
+        .any(|c| c == '/' || c == '\\' || c == '\0' || c.is_control())
+    {
+        return None;
+    }
+    Some(trimmed.to_string())
 }
 
 pub fn validate_terminal_dimensions(cols: u16, rows: u16) -> AppResult<()> {
@@ -296,6 +339,26 @@ mod tests {
         assert!(validate_terminal_dimensions(0, 24).is_err());
         assert!(validate_terminal_dimensions(80, 1).is_err());
         assert!(validate_terminal_dimensions(2000, 24).is_err());
+    }
+
+    #[test]
+    fn test_sftp_path_and_filename_validation() {
+        assert!(validate_local_transfer_path("C:\\Users\\admin\\report.txt").is_ok());
+        assert!(validate_local_transfer_path("/tmp/archive.tar.gz").is_ok());
+        assert!(validate_local_transfer_path("").is_err());
+        assert!(validate_local_transfer_path("bad\0path.txt").is_err());
+        assert!(validate_local_transfer_path("C:\\Users\\admin\\..\\secret.txt").is_err());
+        assert!(validate_local_transfer_path("../../etc/passwd").is_err());
+
+        assert_eq!(
+            sanitize_remote_filename("nginx.conf"),
+            Some("nginx.conf".to_string())
+        );
+        assert_eq!(sanitize_remote_filename("."), None);
+        assert_eq!(sanitize_remote_filename(".."), None);
+        assert_eq!(sanitize_remote_filename("../../.bashrc"), None);
+        assert_eq!(sanitize_remote_filename("sub\\file.txt"), None);
+        assert_eq!(sanitize_remote_filename("bad\0name"), None);
     }
 }
 

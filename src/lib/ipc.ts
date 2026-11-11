@@ -122,8 +122,15 @@ export const ipc = {
   },
 
   pickLocalSavePath: async (defaultFileName: string): Promise<string | null> => {
+    const baseName = defaultFileName
+      .split(/[\\/]/)
+      .pop()
+      ?.replace(/[\0-\x1f\x7f]/g, "")
+      .trim();
+    const safeDefault =
+      baseName && baseName !== "." && baseName !== ".." ? baseName : "download";
     const selected = await save({
-      defaultPath: defaultFileName,
+      defaultPath: safeDefault,
       title: "Save Remote File to PC",
     });
     return typeof selected === "string" ? selected : null;

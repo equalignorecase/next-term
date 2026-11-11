@@ -28,7 +28,14 @@ use crate::models::{
 };
 use russh_sftp::client::SftpSession;
 use russh_sftp::protocol::FileType;
-use crate::validation::{format_host_identity, validate_terminal_dimensions};
+use zeroize::Zeroizing;
+use crate::validation::{
+    format_host_identity, sanitize_remote_filename, validate_local_transfer_path,
+    validate_terminal_dimensions,
+};
+
+const SFTP_INIT_TIMEOUT_SECS: u64 = 15;
+const MAX_SFTP_DIR_ENTRIES: usize = 5_000;
 
 /// Event emitter abstraction so `SessionManager` works in both Tauri runtime and headless Rust integration tests.
 pub trait SessionEventSink: Send + Sync {
@@ -367,21 +374,31 @@ impl SessionManager {
                 .ok_or_else(|| AppError::Session("SSH handle unavailable for SFTP.".into()))?
         };
 
-        let channel = {
-            let h = shared_handle.lock().await;
-            h.channel_open_session()
+        let init_timeout = Duration::from_secs(SFTP_INIT_TIMEOUT_SECS);
+        let sftp = timeout(init_timeout, async {
+            let channel = {
+                let h = shared_handle.lock().await;
+                h.channel_open_session().await.map_err(|e| {
+                    AppError::SshProtocol(format!("Failed to open SFTP channel: {e}"))
+                })?
+            };
+
+            channel
+                .request_subsystem(true, "sftp")
                 .await
-                .map_err(|e| AppError::SshProtocol(format!("Failed to open SFTP channel: {e}")))?
-        };
+                .map_err(|e| {
+                    AppError::SshProtocol(format!("SFTP subsystem request failed: {e}"))
+                })?;
 
-        channel
-            .request_subsystem(true, "sftp")
-            .await
-            .map_err(|e| AppError::SshProtocol(format!("SFTP subsystem request failed: {e}")))?;
+            SftpSession::new(channel.into_stream()).await.map_err(|e| {
+                AppError::SshProtocol(format!("SFTP session initialization failed: {e}"))
+            })
+        })
+        .await
+        .map_err(|_| AppError::ConnectionTimeout(SFTP_INIT_TIMEOUT_SECS))??;
 
-        SftpSession::new(channel.into_stream())
-            .await
-            .map_err(|e| AppError::SshProtocol(format!("SFTP session initialization failed: {e}")))
+        sftp.set_timeout(SFTP_INIT_TIMEOUT_SECS);
+        Ok(sftp)
     }
 
     pub async fn sftp_list_dir(
@@ -407,7 +424,8 @@ impl SessionManager {
             .map_err(|e| AppError::SshProtocol(format!("Failed to list '{current_path}': {e}")))?;
 
         let mut entries: Vec<SftpEntry> = read_dir
-            .map(|entry| {
+            .filter_map(|entry| {
+                let safe_name = sanitize_remote_filename(&entry.file_name())?;
                 let meta = entry.metadata();
                 let kind = match entry.file_type() {
                     FileType::Dir => SftpEntryKind::Directory,
@@ -415,15 +433,21 @@ impl SessionManager {
                     FileType::Symlink => SftpEntryKind::Symlink,
                     _ => SftpEntryKind::Other,
                 };
-                SftpEntry {
-                    name: entry.file_name(),
-                    path: entry.path(),
+                let full_path = if current_path.ends_with('/') {
+                    format!("{current_path}{safe_name}")
+                } else {
+                    format!("{current_path}/{safe_name}")
+                };
+                Some(SftpEntry {
+                    name: safe_name,
+                    path: full_path,
                     kind,
                     size: meta.size.unwrap_or(0),
                     modified_at: meta.mtime.map(u64::from),
                     permissions: meta.permissions,
-                }
+                })
             })
+            .take(MAX_SFTP_DIR_ENTRIES)
             .collect();
 
         entries.sort_by(|a, b| match (a.kind, b.kind) {
@@ -451,6 +475,7 @@ impl SessionManager {
     ) -> AppResult<SftpTransferResult> {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+        validate_local_transfer_path(local_path)?;
         let local = Path::new(local_path);
         if !local.exists() || !local.is_file() {
             return Err(AppError::Validation(format!(
@@ -461,6 +486,7 @@ impl SessionManager {
         let file_name = local
             .file_name()
             .and_then(|n| n.to_str())
+            .and_then(sanitize_remote_filename)
             .ok_or_else(|| AppError::Validation("Invalid local file name.".into()))?;
 
         let sftp = self.open_sftp_session(session_id).await?;
@@ -523,6 +549,7 @@ impl SessionManager {
     ) -> AppResult<SftpTransferResult> {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+        validate_local_transfer_path(local_path)?;
         let sftp = self.open_sftp_session(session_id).await?;
         let mut remote_file = sftp.open(remote_path).await.map_err(|e| {
             AppError::SshProtocol(format!("Failed to open remote file '{remote_path}': {e}"))
@@ -759,17 +786,15 @@ impl SessionManager {
         )
         .await;
 
-        // Resolve secret from either ephemeral input or OS Keychain
-        let resolved_secret: Option<String> = if let Some(ref s) = ephemeral_secret {
+        // Resolve secret from either ephemeral input or OS Keychain (kept in Zeroizing wrapper)
+        let resolved_secret: Option<Zeroizing<String>> = if let Some(ref s) = ephemeral_secret {
             if !s.is_empty() {
-                Some(s.clone())
+                Some(Zeroizing::new(s.clone()))
             } else {
                 None
             }
         } else if let Some(ref cred_ref) = host.credential_reference {
-            self.credentials
-                .get_secret(cred_ref)?
-                .map(|z| z.as_str().to_string())
+            self.credentials.get_secret(cred_ref)?
         } else {
             None
         };
@@ -777,11 +802,14 @@ impl SessionManager {
         // Perform authentication
         let authenticated = match host.auth_method {
             AuthMethod::Password => {
-                let password = resolved_secret.as_deref().ok_or_else(|| {
-                    AppError::AuthenticationFailed(
-                        "Password is required to authenticate with this host.".into(),
-                    )
-                })?;
+                let password = resolved_secret
+                    .as_ref()
+                    .map(|z| z.as_str())
+                    .ok_or_else(|| {
+                        AppError::AuthenticationFailed(
+                            "Password is required to authenticate with this host.".into(),
+                        )
+                    })?;
                 handle
                     .authenticate_password(&host.username, password)
                     .await
@@ -800,13 +828,16 @@ impl SessionManager {
                         AppError::InvalidPrivateKey("No private key path configured.".into())
                     })?;
 
-                let key_pem = std::fs::read_to_string(Path::new(key_path_str)).map_err(|e| {
-                    AppError::InvalidPrivateKey(format!(
-                        "Unable to read private key file '{key_path_str}': {e}"
-                    ))
-                })?;
+                let key_pem = Zeroizing::new(
+                    std::fs::read_to_string(Path::new(key_path_str)).map_err(|e| {
+                        AppError::InvalidPrivateKey(format!(
+                            "Unable to read private key file '{key_path_str}': {e}"
+                        ))
+                    })?,
+                );
 
-                let key_pair = match decode_secret_key(&key_pem, resolved_secret.as_deref()) {
+                let passphrase = resolved_secret.as_ref().map(|z| z.as_str());
+                let key_pair = match decode_secret_key(&key_pem, passphrase) {
                     Ok(k) => Arc::new(k),
                     Err(e) => {
                         let msg = e.to_string().to_lowercase();

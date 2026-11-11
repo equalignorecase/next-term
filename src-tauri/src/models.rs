@@ -60,6 +60,14 @@ pub struct HostInput {
     pub save_secret: bool,
 }
 
+impl Drop for HostInput {
+    fn drop(&mut self) {
+        if let Some(ref mut s) = self.secret {
+            s.zeroize();
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HostGroup {
