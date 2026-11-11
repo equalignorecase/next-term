@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { ipc } from "@/lib/ipc";
 import { encodeBase64 } from "@/lib/base64";
+import { resolveThemePreset } from "@/lib/themes";
 import { formatError } from "@/lib/utils";
 import type {
   AppSettings,
@@ -10,6 +11,7 @@ import type {
   HostKeyChallengeEvent,
   KnownHost,
   SessionState,
+  SshTelemetryEvent,
 } from "@/types/models";
 
 export interface SessionTab {
@@ -25,6 +27,7 @@ export interface SessionTab {
   errorMessage: string | null;
   cols: number;
   rows: number;
+  telemetry: SshTelemetryEvent | null;
 }
 
 export interface SecretPromptState {
@@ -34,16 +37,25 @@ export interface SecretPromptState {
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
-  theme: "dark",
+  theme: "obsidian",
+  accentColor: "#10B981",
   terminalFontFamily: "JetBrains Mono, Cascadia Code, Consolas, monospace",
   terminalFontSize: 14,
   terminalLineHeight: 1.25,
+  terminalPadding: 8,
   cursorStyle: "block",
   cursorBlink: true,
   scrollback: 5000,
+  copyOnSelect: false,
+  rightClickBehavior: "context_menu",
+  enableBell: false,
   connectionTimeoutSecs: 15,
+  keepaliveIntervalSecs: 30,
   terminalType: "xterm-256color",
   defaultSshPort: 22,
+  telemetryEnabled: true,
+  telemetryIntervalSecs: 2,
+  uiDensity: "compact",
 };
 
 interface AppStore {
@@ -82,6 +94,7 @@ interface AppStore {
 
   // Settings
   saveSettings: (next: AppSettings) => Promise<AppSettings>;
+  toggleTheme: () => Promise<void>;
 
   // Sessions & Tabs
   initiateConnection: (
@@ -115,6 +128,7 @@ interface AppStore {
   handleErrorEvent: (sessionId: string, code: string, message: string) => void;
   handleClosedEvent: (sessionId: string, reason: string) => void;
   handleHostKeyChallenge: (challenge: HostKeyChallengeEvent) => void;
+  handleTelemetryEvent: (telemetry: SshTelemetryEvent) => void;
 }
 
 export const useAppStore = create<AppStore>((set, get) => ({
@@ -229,6 +243,25 @@ export const useAppStore = create<AppStore>((set, get) => ({
     return saved;
   },
 
+  toggleTheme: async () => {
+    const current = get().settings;
+    const isCurrentlyLight = resolveThemePreset(current.theme).isLight;
+    const nextTheme = isCurrentlyLight ? "obsidian" : "light";
+    const nextPreset = resolveThemePreset(nextTheme);
+    const nextSettings: AppSettings = {
+      ...current,
+      theme: nextTheme,
+      accentColor: nextPreset.defaultAccent,
+    };
+    set({ settings: nextSettings });
+    try {
+      const saved = await ipc.updateSettings(nextSettings);
+      set({ settings: saved });
+    } catch {
+      // Keep optimistic theme state if backend save fails in test/mock
+    }
+  },
+
   initiateConnection: async (host, options) => {
     // If password auth is configured and no stored credential or ephemeral secret is provided, prompt first
     if (
@@ -267,6 +300,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       errorMessage: null,
       cols,
       rows,
+      telemetry: null,
     };
 
     set((s) => ({
@@ -455,6 +489,14 @@ export const useAppStore = create<AppStore>((set, get) => ({
         ),
         challenge,
       ],
+    }));
+  },
+
+  handleTelemetryEvent: (telemetry) => {
+    set((s) => ({
+      tabs: s.tabs.map((t) =>
+        t.sessionId === telemetry.sessionId ? { ...t, telemetry } : t
+      ),
     }));
   },
 }));

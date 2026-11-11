@@ -154,11 +154,34 @@ pub fn validate_terminal_dimensions(cols: u16, rows: u16) -> AppResult<()> {
 }
 
 pub fn validate_settings(settings: &AppSettings) -> AppResult<()> {
-    if !matches!(settings.theme.as_str(), "dark" | "light") {
+    let valid_themes = [
+        "dark",
+        "light",
+        "obsidian",
+        "tokyo-night",
+        "catppuccin",
+        "dracula",
+        "nord",
+        "gruvbox",
+        "solarized-light",
+    ];
+    if !valid_themes.contains(&settings.theme.as_str()) {
+        return Err(AppError::Validation(format!(
+            "Unsupported theme preset '{}'.",
+            settings.theme
+        )));
+    }
+
+    let accent = settings.accent_color.trim();
+    if accent.len() != 7
+        || !accent.starts_with('#')
+        || !accent[1..].chars().all(|c| c.is_ascii_hexdigit())
+    {
         return Err(AppError::Validation(
-            "Theme must be either 'dark' or 'light'.".into(),
+            "Accent color must be a valid 6-digit hex color (e.g., #10B981).".into(),
         ));
     }
+
     if settings.terminal_font_family.trim().is_empty()
         || settings.terminal_font_family.len() > 256
     {
@@ -176,6 +199,11 @@ pub fn validate_settings(settings: &AppSettings) -> AppResult<()> {
             "Terminal line height must be between 1.0 and 2.5.".into(),
         ));
     }
+    if settings.terminal_padding > 32 {
+        return Err(AppError::Validation(
+            "Terminal padding must be between 0 and 32 pixels.".into(),
+        ));
+    }
     if !matches!(settings.cursor_style.as_str(), "block" | "underline" | "bar") {
         return Err(AppError::Validation(
             "Cursor style must be 'block', 'underline', or 'bar'.".into(),
@@ -186,9 +214,32 @@ pub fn validate_settings(settings: &AppSettings) -> AppResult<()> {
             "Scrollback size must be between 100 and 100,000 lines.".into(),
         ));
     }
+    if !matches!(
+        settings.right_click_behavior.as_str(),
+        "context_menu" | "paste"
+    ) {
+        return Err(AppError::Validation(
+            "Right-click behavior must be 'context_menu' or 'paste'.".into(),
+        ));
+    }
     if !(3..=300).contains(&settings.connection_timeout_secs) {
         return Err(AppError::Validation(
             "Connection timeout must be between 3 and 300 seconds.".into(),
+        ));
+    }
+    if !(5..=300).contains(&settings.keepalive_interval_secs) {
+        return Err(AppError::Validation(
+            "Keepalive interval must be between 5 and 300 seconds.".into(),
+        ));
+    }
+    if !(1..=30).contains(&settings.telemetry_interval_secs) {
+        return Err(AppError::Validation(
+            "Telemetry refresh interval must be between 1 and 30 seconds.".into(),
+        ));
+    }
+    if !matches!(settings.ui_density.as_str(), "compact" | "comfortable") {
+        return Err(AppError::Validation(
+            "UI density must be 'compact' or 'comfortable'.".into(),
         ));
     }
     if !matches!(

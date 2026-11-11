@@ -38,6 +38,7 @@ vi.mock("@/lib/ipc", () => ({
     onSshError: vi.fn(() => Promise.resolve(() => {})),
     onSshClosed: vi.fn(() => Promise.resolve(() => {})),
     onHostKeyChallenge: vi.fn(() => Promise.resolve(() => {})),
+    onSshTelemetry: vi.fn(() => Promise.resolve(() => {})),
   },
 }));
 
@@ -149,7 +150,7 @@ describe("NexTerm Host Management, Multi-Tab Lifecycle & Settings UI", () => {
 
     render(<App />);
 
-    expect(await screen.findByText("Prod Bastion")).toBeInTheDocument();
+    expect(await screen.findAllByText("Prod Bastion")).not.toHaveLength(0);
 
     // Open New Host dialog
     await user.click(screen.getByRole("button", { name: /New Host/i }));
@@ -173,7 +174,36 @@ describe("NexTerm Host Management, Multi-Tab Lifecycle & Settings UI", () => {
     await waitFor(() => {
       expect(ipc.createHost).toHaveBeenCalledTimes(1);
     });
-    expect(await screen.findByText("Staging Redis")).toBeInTheDocument();
+    expect(await screen.findAllByText("Staging Redis")).not.toHaveLength(0);
+  });
+
+  it("opens Command Palette (Ctrl+K) and toggles collapsible sidebar", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await screen.findAllByText("Prod Bastion");
+
+    // Open Command Palette via shortcut button
+    await user.click(
+      screen.getByRole("button", {
+        name: /Command Palette & Quick Connect/i,
+      })
+    );
+    expect(
+      screen.getByRole("dialog", { name: "Command Palette" })
+    ).toBeInTheDocument();
+
+    // Filter inside Command Palette
+    const paletteInput = screen.getByLabelText("Command palette search");
+    await user.type(paletteInput, "Toggle Sidebar");
+    await user.keyboard("{Enter}");
+
+    // Sidebar should now be collapsed
+    expect(screen.queryByPlaceholderText("Filter hosts...")).not.toBeInTheDocument();
+
+    // Expand sidebar back via StatusBar button
+    await user.click(screen.getByRole("button", { name: "Toggle Sidebar" }));
+    expect(screen.getByPlaceholderText("Filter hosts...")).toBeInTheDocument();
   });
 
   it("opens multiple independent SSH session tabs, switches between them, and closes one without killing the other", async () => {
@@ -203,8 +233,8 @@ describe("NexTerm Host Management, Multi-Tab Lifecycle & Settings UI", () => {
 
     render(<App />);
 
-    expect(await screen.findByText("Prod Bastion")).toBeInTheDocument();
-    expect(await screen.findByText("Worker Node 02")).toBeInTheDocument();
+    expect(await screen.findAllByText("Prod Bastion")).not.toHaveLength(0);
+    expect(await screen.findAllByText("Worker Node 02")).not.toHaveLength(0);
 
     // Connect to first host
     await user.click(
@@ -276,19 +306,27 @@ describe("NexTerm Host Management, Multi-Tab Lifecycle & Settings UI", () => {
     });
   });
 
-  it("persists updated terminal settings via SettingsDialog", async () => {
+  it("persists updated terminal settings, theme presets, and custom accent color via SettingsDialog", async () => {
     const user = userEvent.setup();
     vi.mocked(ipc.updateSettings).mockImplementation(async (s) => s);
 
     render(<App />);
-    await screen.findByText("Prod Bastion");
+    await screen.findAllByText("Prod Bastion");
 
     await user.click(
       screen.getByRole("button", { name: /Settings & Known Hosts/i })
     );
     expect(
-      await screen.findByText(/Terminal & Connection Preferences/i)
+      await screen.findByText(/Appearance, Terminal & SSH/i)
     ).toBeInTheDocument();
+    expect(screen.getByTestId("live-terminal-preview")).toBeInTheDocument();
+
+    // Select Tokyo Night preset card
+    await user.click(screen.getByTestId("theme-card-tokyo-night"));
+    // Pick Catppuccin Mauve accent swatch
+    await user.click(
+      screen.getByRole("button", { name: /Accent Catppuccin Mauve/i })
+    );
 
     await user.click(
       screen.getByRole("button", { name: /Save Preferences/i })
@@ -297,5 +335,102 @@ describe("NexTerm Host Management, Multi-Tab Lifecycle & Settings UI", () => {
     await waitFor(() => {
       expect(ipc.updateSettings).toHaveBeenCalledTimes(1);
     });
+    expect(vi.mocked(ipc.updateSettings).mock.calls[0][0].theme).toBe(
+      "tokyo-night"
+    );
+    expect(vi.mocked(ipc.updateSettings).mock.calls[0][0].accentColor).toBe(
+      "#CBA6F7"
+    );
+  });
+
+  it("displays remote CPU, RAM, and Network telemetry in the StatusBar when connected", async () => {
+    const user = userEvent.setup();
+    vi.mocked(ipc.connectSsh).mockImplementation(async (req) => ({
+      sessionId: req.sessionId ?? "sess-telemetry",
+      hostId: req.hostId,
+      hostName: "Prod Bastion",
+      hostname: "bastion.example.com",
+      port: 22,
+      username: "ops",
+      state: "Connected",
+      cols: req.cols,
+      rows: req.rows,
+      connectedAt: "2026-01-01T00:00:00Z",
+      errorMessage: null,
+    }));
+
+    render(<App />);
+    await screen.findAllByText("Prod Bastion");
+
+    await user.click(
+      screen.getByRole("button", { name: "Connect to Prod Bastion" })
+    );
+
+    const activeSessionId = useAppStore.getState().tabs[0].sessionId;
+
+    act(() => {
+      useAppStore.getState().handleStatusEvent(activeSessionId, "Connected", "Connected");
+      useAppStore.getState().handleTelemetryEvent({
+        sessionId: activeSessionId,
+        cpuPercent: 42.3,
+        memUsedBytes: 2 * 1024 * 1024 * 1024,
+        memTotalBytes: 8 * 1024 * 1024 * 1024,
+        memPercent: 25.0,
+        netRxBytesPerSec: 128 * 1024,
+        netTxBytesPerSec: 32 * 1024,
+      });
+    });
+
+    expect(await screen.findByTestId("telemetry-cpu")).toHaveTextContent(
+      "[■■░░░] 42%"
+    );
+    expect(screen.getByTestId("telemetry-mem")).toHaveTextContent(
+      "RAM2.00 / 8.00 GB·25%"
+    );
+    expect(screen.getByTestId("telemetry-net")).toHaveTextContent(
+      "↓ 128 KB/s"
+    );
+    expect(screen.getByTestId("telemetry-net")).toHaveTextContent(
+      "↑ 32.0 KB/s"
+    );
+  });
+
+  it("opens minimal right-click context menu on TerminalPane with Copy, Paste, Find, and Clear Terminal", async () => {
+    const user = userEvent.setup();
+    vi.mocked(ipc.connectSsh).mockImplementation(async (req) => ({
+      sessionId: req.sessionId ?? "sess-ctx",
+      hostId: req.hostId,
+      hostName: "Prod Bastion",
+      hostname: "bastion.example.com",
+      port: 22,
+      username: "ops",
+      state: "Connected",
+      cols: req.cols,
+      rows: req.rows,
+      connectedAt: "2026-01-01T00:00:00Z",
+      errorMessage: null,
+    }));
+
+    render(<App />);
+    await screen.findAllByText("Prod Bastion");
+
+    await user.click(
+      screen.getByRole("button", { name: "Connect to Prod Bastion" })
+    );
+
+    const activeSessionId = useAppStore.getState().tabs[0].sessionId;
+    const pane = await screen.findByTestId(`terminal-pane-${activeSessionId}`);
+
+    // Right-click on terminal pane
+    await user.pointer({ keys: "[MouseRight]", target: pane });
+
+    expect(
+      await screen.findByRole("menu", { name: "Terminal context menu" })
+    ).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: /Copy/i })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: /Paste/i })).toBeInTheDocument();
+    expect(
+      screen.getByRole("menuitem", { name: /Clear Terminal/i })
+    ).toBeInTheDocument();
   });
 });

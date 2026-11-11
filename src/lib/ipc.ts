@@ -15,6 +15,7 @@ import type {
   SshErrorEvent,
   SshOutputEvent,
   SshStatusEvent,
+  SshTelemetryEvent,
 } from "@/types/models";
 
 export const ipc = {
@@ -87,5 +88,9 @@ export const ipc = {
     listen<HostKeyChallengeEvent>("ssh:host-key-challenge", (e) =>
       handler(e.payload)
     ),
+  onSshTelemetry: (
+    handler: (event: SshTelemetryEvent) => void
+  ): Promise<UnlistenFn> =>
+    listen<SshTelemetryEvent>("ssh:telemetry", (e) => handler(e.payload)),
 };
 

@@ -120,15 +120,45 @@ export interface SshClosedEvent {
   reason: string;
 }
 
+export interface SshTelemetryEvent {
+  sessionId: string;
+  cpuPercent: number;
+  memUsedBytes: number;
+  memTotalBytes: number;
+  memPercent: number;
+  netRxBytesPerSec: number;
+  netTxBytesPerSec: number;
+}
+
+export type ThemePresetId =
+  | "obsidian"
+  | "tokyo-night"
+  | "catppuccin"
+  | "dracula"
+  | "nord"
+  | "gruvbox"
+  | "light"
+  | "solarized-light"
+  | "dark";
+
 export interface AppSettings {
-  theme: "dark" | "light";
+  theme: ThemePresetId;
+  accentColor: string;
   terminalFontFamily: string;
   terminalFontSize: number;
   terminalLineHeight: number;
+  terminalPadding: number;
   cursorStyle: "block" | "underline" | "bar";
   cursorBlink: boolean;
   scrollback: number;
+  copyOnSelect: boolean;
+  rightClickBehavior: "context_menu" | "paste";
+  enableBell: boolean;
   connectionTimeoutSecs: number;
+  keepaliveIntervalSecs: number;
+  telemetryEnabled: boolean;
+  telemetryIntervalSecs: number;
+  uiDensity: "compact" | "comfortable";
   terminalType: "xterm-256color" | "xterm" | "vt100";
   defaultSshPort: number;
 }

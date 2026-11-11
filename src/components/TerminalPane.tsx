@@ -1,18 +1,44 @@
-import React, { useEffect, useRef, useState } from "react";
-import { Terminal } from "@xterm/xterm";
+import React, { useCallback, useEffect, useRef, useState } from "react";
+import { Terminal, type ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import "@xterm/xterm/css/xterm.css";
-import { Search, X, RotateCcw, AlertTriangle, Loader2 } from "lucide-react";
+import {
+  Search,
+  X,
+  RotateCcw,
+  AlertTriangle,
+  Loader2,
+  Copy,
+  ClipboardPaste,
+  Trash2,
+  CheckSquare,
+  Check,
+} from "lucide-react";
 
 import { decodeBase64ToBytes } from "@/lib/base64";
 import { ipc } from "@/lib/ipc";
+import { buildTerminalTheme } from "@/lib/themes";
 import { useAppStore, type SessionTab } from "@/store/useAppStore";
+import type { ThemePresetId } from "@/types/models";
 
 interface TerminalPaneProps {
   tab: SessionTab;
   isActive: boolean;
+}
+
+interface ContextMenuPosition {
+  x: number;
+  y: number;
+  hasSelection: boolean;
+}
+
+export function getTerminalTheme(
+  mode: ThemePresetId,
+  accentColor = "#10B981"
+): ITheme {
+  return buildTerminalTheme(mode, accentColor);
 }
 
 export const TerminalPane: React.FC<TerminalPaneProps> = ({ tab, isActive }) => {
@@ -28,14 +54,58 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({ tab, isActive }) => 
 
   const [showSearch, setShowSearch] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const [contextMenu, setContextMenu] = useState<ContextMenuPosition | null>(
+    null
+  );
+  const [clipboardNotice, setClipboardNotice] = useState<string | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const noticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const flashNotice = useCallback((msg: string) => {
+    if (noticeTimerRef.current) clearTimeout(noticeTimerRef.current);
+    setClipboardNotice(msg);
+    noticeTimerRef.current = setTimeout(() => {
+      setClipboardNotice(null);
+    }, 1400);
+  }, []);
+
+  const copySelectionToClipboard = useCallback(async () => {
+    const term = termRef.current;
+    if (!term || !term.hasSelection()) return false;
+    const selectedText = term.getSelection();
+    if (!selectedText) return false;
+    try {
+      await navigator.clipboard.writeText(selectedText);
+      term.clearSelection();
+      flashNotice("Copied selection");
+      return true;
+    } catch {
+      return false;
+    }
+  }, [flashNotice]);
+
+  const pasteFromClipboard = useCallback(async () => {
+    const term = termRef.current;
+    if (!term) return;
+    try {
+      const text = await navigator.clipboard.readText();
+      if (text) {
+        if (typeof term.paste === "function") {
+          term.paste(text);
+        } else {
+          void sendInput(tab.sessionId, text);
+        }
+      }
+    } catch {
+      // Clipboard read permission denied or empty
+    }
+  }, [sendInput, tab.sessionId]);
 
   // Initialize xterm instance once per session tab
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
 
-    const isLight = settings.theme === "light";
     const term = new Terminal({
       fontFamily: settings.terminalFontFamily,
       fontSize: settings.terminalFontSize,
@@ -45,35 +115,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({ tab, isActive }) => 
       scrollback: settings.scrollback,
       allowProposedApi: true,
       convertEol: false,
-      theme: isLight
-        ? {
-            background: "#FFFFFF",
-            foreground: "#0F172A",
-            cursor: "#2563EB",
-            selectionBackground: "rgba(37, 99, 235, 0.25)",
-          }
-        : {
-            background: "#0B0F16",
-            foreground: "#F8FAFC",
-            cursor: "#60A5FA",
-            selectionBackground: "rgba(96, 165, 250, 0.28)",
-            black: "#0B0F16",
-            red: "#EF4444",
-            green: "#22C55E",
-            yellow: "#F59E0B",
-            blue: "#60A5FA",
-            magenta: "#C084FC",
-            cyan: "#38BDF8",
-            white: "#F8FAFC",
-            brightBlack: "#64748B",
-            brightRed: "#F87171",
-            brightGreen: "#4ADE80",
-            brightYellow: "#FBBF24",
-            brightBlue: "#93C5FD",
-            brightMagenta: "#D8B4FE",
-            brightCyan: "#7DD3FC",
-            brightWhite: "#FFFFFF",
-          },
+      theme: getTerminalTheme(settings.theme, settings.accentColor),
     });
 
     const fitAddon = new FitAddon();
@@ -114,19 +156,65 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({ tab, isActive }) => 
       void sendInput(tab.sessionId, bytes);
     });
 
-    // Custom key handler for Ctrl+Shift+F (Search), Ctrl+Shift+C (Copy), Ctrl+Shift+V (Paste)
+    // Optional Auto Copy-on-Select support
+    const onSelectionDisposable =
+      typeof term.onSelectionChange === "function"
+        ? term.onSelectionChange(() => {
+            if (!useAppStore.getState().settings.copyOnSelect) return;
+            if (term.hasSelection()) {
+              const selected = term.getSelection();
+              if (selected) {
+                void navigator.clipboard.writeText(selected).then(() => {
+                  flashNotice("Auto-copied selection");
+                });
+              }
+            }
+          })
+        : { dispose: () => {} };
+
+    // Smart Clipboard & Search Keyboard Handler:
+    // - Ctrl+C (when text is selected) or Ctrl+Shift+C: Copy selection & clear highlight
+    // - Ctrl+C (when nothing is selected): Pass through to shell as SIGINT (\x03)
+    // - Ctrl+V or Ctrl+Shift+V: Paste from OS clipboard via term.paste()
+    // - Ctrl+Shift+F: Open terminal buffer search
     term.attachCustomKeyEventHandler((ev) => {
-      if (ev.type === "keydown" && ev.ctrlKey && ev.shiftKey) {
-        if (ev.key.toLowerCase() === "f") {
-          setShowSearch((prev) => !prev);
-          setTimeout(() => searchInputRef.current?.focus(), 20);
-          return false;
-        }
-        if (ev.key.toLowerCase() === "c" && term.hasSelection()) {
-          void navigator.clipboard.writeText(term.getSelection());
-          return false;
-        }
+      if (ev.type !== "keydown") return true;
+
+      const mod = ev.ctrlKey || ev.metaKey;
+      if (!mod) return true;
+
+      const key = ev.key.toLowerCase();
+
+      // Search (Ctrl+Shift+F)
+      if (ev.shiftKey && key === "f") {
+        ev.preventDefault();
+        setShowSearch((prev) => !prev);
+        setTimeout(() => searchInputRef.current?.focus(), 20);
+        return false;
       }
+
+      // Copy (Ctrl+C with active selection, or Ctrl+Shift+C)
+      if (key === "c" && (ev.shiftKey || term.hasSelection())) {
+        if (term.hasSelection()) {
+          ev.preventDefault();
+          void copySelectionToClipboard();
+          return false;
+        }
+        return !ev.shiftKey;
+      }
+
+      // Paste (Ctrl+V or Ctrl+Shift+V)
+      if (key === "v") {
+        ev.preventDefault();
+        void pasteFromClipboard();
+        return false;
+      }
+
+      // Allow Global App Shortcuts (Ctrl+K, Ctrl+B, Ctrl+N, Ctrl+W, Ctrl+,) to bubble up
+      if (!ev.shiftKey && ["k", "b", "n", "w", ","].includes(key)) {
+        return false;
+      }
+
       return true;
     });
 
@@ -171,10 +259,12 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({ tab, isActive }) => 
     return () => {
       isDisposed = true;
       if (resizeTimer) clearTimeout(resizeTimer);
+      if (noticeTimerRef.current) clearTimeout(noticeTimerRef.current);
       resizeObserver.disconnect();
       if (unlistenOutput) unlistenOutput();
       onDataDisposable.dispose();
       onBinaryDisposable.dispose();
+      onSelectionDisposable.dispose();
       term.dispose();
       termRef.current = null;
       fitAddonRef.current = null;
@@ -183,7 +273,15 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({ tab, isActive }) => 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab.sessionId]);
 
-  // Apply live settings updates without restarting session
+  // Dismiss context menu on outside click or Escape
+  useEffect(() => {
+    if (!contextMenu) return;
+    const closeMenu = () => setContextMenu(null);
+    window.addEventListener("click", closeMenu);
+    return () => window.removeEventListener("click", closeMenu);
+  }, [contextMenu]);
+
+  // Apply live settings updates (including complete full-palette theme sync) without restarting session
   useEffect(() => {
     const term = termRef.current;
     if (!term) return;
@@ -193,18 +291,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({ tab, isActive }) => 
     term.options.cursorStyle = settings.cursorStyle;
     term.options.cursorBlink = settings.cursorBlink;
     term.options.scrollback = settings.scrollback;
-    term.options.theme =
-      settings.theme === "light"
-        ? {
-            background: "#FFFFFF",
-            foreground: "#0F172A",
-            cursor: "#2563EB",
-          }
-        : {
-            background: "#0B0F16",
-            foreground: "#F8FAFC",
-            cursor: "#60A5FA",
-          };
+    term.options.theme = getTerminalTheme(settings.theme, settings.accentColor);
     try {
       fitAddonRef.current?.fit();
     } catch {
@@ -244,6 +331,23 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({ tab, isActive }) => 
     }
   };
 
+  const handleContextMenu = (e: React.MouseEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    if (settings.rightClickBehavior === "paste") {
+      void pasteFromClipboard();
+      termRef.current?.focus();
+      return;
+    }
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = Math.min(e.clientX - rect.left, Math.max(10, rect.width - 190));
+    const y = Math.min(e.clientY - rect.top, Math.max(10, rect.height - 170));
+    setContextMenu({
+      x,
+      y,
+      hasSelection: Boolean(termRef.current?.hasSelection()),
+    });
+  };
+
   const isConnecting =
     tab.state === "Connecting" ||
     tab.state === "VerifyingHost" ||
@@ -257,14 +361,122 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({ tab, isActive }) => 
           : "hidden"
       }
       data-testid={`terminal-pane-${tab.sessionId}`}
+      onContextMenu={handleContextMenu}
     >
-      {/* Floating Search Bar */}
+      {/* Subtle Clipboard Feedback Pill */}
+      {clipboardNotice && (
+        <div className="absolute top-2.5 right-4 z-30 flex items-center gap-1.5 px-2.5 py-1 rounded-xs bg-sidebar border border-accent/50 text-[11px] font-mono text-accent shadow-lg pointer-events-none">
+          <Check className="w-3 h-3" />
+          <span>{clipboardNotice}</span>
+        </div>
+      )}
+
+      {/* Minimal Right-Click Context Menu */}
+      {contextMenu && (
+        <div
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+          onClick={(e) => e.stopPropagation()}
+          role="menu"
+          aria-label="Terminal context menu"
+          className="absolute z-30 w-44 py-1 rounded-xs bg-sidebar border border-border shadow-2xl font-mono text-xs divide-y divide-border/50"
+        >
+          <div className="py-0.5">
+            <button
+              type="button"
+              role="menuitem"
+              disabled={!contextMenu.hasSelection}
+              onClick={() => {
+                setContextMenu(null);
+                void copySelectionToClipboard();
+                termRef.current?.focus();
+              }}
+              className="w-full px-3 py-1.5 flex items-center justify-between text-left hover:bg-elevated text-primaryText disabled:opacity-40 disabled:pointer-events-none"
+            >
+              <span className="flex items-center gap-2">
+                <Copy className="w-3 h-3 text-accent" />
+                <span>Copy</span>
+              </span>
+              <span className="text-[10px] text-secondaryText">Ctrl+C</span>
+            </button>
+
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setContextMenu(null);
+                void pasteFromClipboard();
+                termRef.current?.focus();
+              }}
+              className="w-full px-3 py-1.5 flex items-center justify-between text-left hover:bg-elevated text-primaryText"
+            >
+              <span className="flex items-center gap-2">
+                <ClipboardPaste className="w-3 h-3 text-cyber" />
+                <span>Paste</span>
+              </span>
+              <span className="text-[10px] text-secondaryText">Ctrl+V</span>
+            </button>
+
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setContextMenu(null);
+                termRef.current?.selectAll();
+                termRef.current?.focus();
+              }}
+              className="w-full px-3 py-1.5 flex items-center justify-between text-left hover:bg-elevated text-primaryText"
+            >
+              <span className="flex items-center gap-2">
+                <CheckSquare className="w-3 h-3 text-secondaryText" />
+                <span>Select All</span>
+              </span>
+            </button>
+          </div>
+
+          <div className="py-0.5">
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setContextMenu(null);
+                setShowSearch(true);
+                setTimeout(() => searchInputRef.current?.focus(), 20);
+              }}
+              className="w-full px-3 py-1.5 flex items-center justify-between text-left hover:bg-elevated text-primaryText"
+            >
+              <span className="flex items-center gap-2">
+                <Search className="w-3 h-3 text-secondaryText" />
+                <span>Find</span>
+              </span>
+              <span className="text-[10px] text-secondaryText">Ctrl+⇧+F</span>
+            </button>
+
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setContextMenu(null);
+                termRef.current?.clear();
+                termRef.current?.focus();
+              }}
+              className="w-full px-3 py-1.5 flex items-center justify-between text-left hover:bg-elevated text-primaryText"
+            >
+              <span className="flex items-center gap-2">
+                <Trash2 className="w-3 h-3 text-error" />
+                <span>Clear Terminal</span>
+              </span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Floating Monospace Search Bar */}
       {showSearch && (
         <form
           onSubmit={handleSearch}
-          className="absolute top-3 right-5 z-20 flex items-center gap-1.5 bg-elevated border border-border rounded-md px-2.5 py-1.5 shadow-lg"
+          className="absolute top-2.5 right-4 z-20 flex items-center gap-1.5 bg-sidebar border border-border rounded-xs px-2.5 py-1 shadow-xl font-mono"
         >
-          <Search className="w-3.5 h-3.5 text-secondaryText" />
+          <Search className="w-3 h-3 text-accent" />
           <input
             ref={searchInputRef}
             type="text"
@@ -275,7 +487,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({ tab, isActive }) => 
                 searchAddonRef.current?.findNext(e.target.value);
               }
             }}
-            placeholder="Find in terminal..."
+            placeholder="search buffer..."
             className="bg-transparent text-xs text-primaryText focus:outline-none w-44"
           />
           <button
@@ -287,20 +499,22 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({ tab, isActive }) => 
             className="text-secondaryText hover:text-primaryText p-0.5"
             aria-label="Close terminal search"
           >
-            <X className="w-3.5 h-3.5" />
+            <X className="w-3 h-3" />
           </button>
         </form>
       )}
 
-      {/* Connection Progress Banner */}
+      {/* Sleek Connection Handshake Bar */}
       {isConnecting && (
-        <div className="flex items-center justify-between px-4 py-2 bg-surface border-b border-border text-xs text-secondaryText">
+        <div className="flex items-center justify-between px-3 py-1.5 bg-sidebar border-b border-border text-[11px] font-mono text-secondaryText">
           <div className="flex items-center gap-2">
-            <Loader2 className="w-3.5 h-3.5 text-accent animate-spin" />
-            <span className="font-medium text-primaryText">{tab.state}:</span>
+            <Loader2 className="w-3 h-3 text-accent animate-spin" />
+            <span className="text-accent uppercase font-semibold">
+              [{tab.state}]
+            </span>
             <span>{tab.statusMessage}</span>
           </div>
-          <span className="font-mono text-[11px]">
+          <span className="text-secondaryText/80">
             {tab.username}@{tab.hostname}:{tab.port}
           </span>
         </div>
@@ -309,19 +523,19 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({ tab, isActive }) => 
       {/* Disconnected or Failed Banner with Safe Reconnect */}
       {(tab.state === "Failed" || tab.state === "Disconnected") && (
         <div
-          className={`flex items-center justify-between px-4 py-2.5 border-b text-xs ${
+          className={`flex items-center justify-between px-3 py-1.5 border-b text-[11px] font-mono ${
             tab.state === "Failed"
               ? "bg-error/10 border-error/30 text-error"
-              : "bg-elevated/70 border-border text-secondaryText"
+              : "bg-sidebar border-border text-secondaryText"
           }`}
         >
-          <div className="flex items-center gap-2">
-            <AlertTriangle className="w-4 h-4 shrink-0" />
-            <div>
-              <span className="font-semibold mr-1.5">
+          <div className="flex items-center gap-2 min-w-0">
+            <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+            <div className="truncate">
+              <span className="font-bold mr-1.5">
                 {tab.state === "Failed"
-                  ? `Connection Failed (${tab.errorCode ?? "ERROR"}):`
-                  : "Disconnected:"}
+                  ? `[${tab.errorCode ?? "ERROR"}]`
+                  : "[EOF]"}
               </span>
               <span>{tab.errorMessage ?? tab.statusMessage}</span>
             </div>
@@ -329,10 +543,10 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({ tab, isActive }) => 
           <button
             type="button"
             onClick={() => void reconnectTab(tab.sessionId)}
-            className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-surface hover:bg-elevated text-primaryText border border-border transition-colors font-medium"
+            className="flex items-center gap-1.5 px-2 py-0.5 rounded-xs bg-surface hover:bg-elevated text-primaryText border border-border transition-colors shrink-0 ml-3"
           >
-            <RotateCcw className="w-3.5 h-3.5" />
-            Reconnect
+            <RotateCcw className="w-3 h-3 text-accent" />
+            <span>reconnect</span>
           </button>
         </div>
       )}
@@ -340,10 +554,12 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({ tab, isActive }) => 
       {/* xterm.js Canvas / Viewport Container */}
       <div
         ref={containerRef}
-        className="flex-1 w-full h-full overflow-hidden"
-        onClick={() => termRef.current?.focus()}
+        className="flex-1 w-full h-full overflow-hidden bg-background"
+        onClick={() => {
+          setContextMenu(null);
+          termRef.current?.focus();
+        }}
       />
     </div>
   );
 };
-

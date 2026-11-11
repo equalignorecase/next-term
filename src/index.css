@@ -2,23 +2,37 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
+:root,
+html.dark {
   color-scheme: dark;
+  --color-background: 9 10 15;       /* #090A0F Obsidian */
+  --color-sidebar: 13 15 23;         /* #0D0F17 */
+  --color-surface: 18 21 31;         /* #12151F */
+  --color-elevated: 24 28 41;        /* #181C29 */
+  --color-border: 30 34 45;          /* #1E222D */
+  --color-primary-text: 241 245 249; /* #F1F5F9 */
+  --color-secondary-text: 126 139 155; /* #7E8B9B */
+  --color-accent: 16 185 129;        /* #10B981 Emerald */
+  --terminal-bg: #090A0F;
 }
 
 html.light {
   color-scheme: light;
+  --color-background: 255 255 255;   /* #FFFFFF */
+  --color-sidebar: 241 245 249;      /* #F1F5F9 */
+  --color-surface: 248 250 252;      /* #F8FAFC */
+  --color-elevated: 226 232 240;     /* #E2E8F0 */
+  --color-border: 203 213 225;       /* #CBD5E1 */
+  --color-primary-text: 15 23 42;    /* #0F172A */
+  --color-secondary-text: 100 116 139; /* #64748B */
+  --color-accent: 5 150 105;         /* #059669 Emerald-600 for crisp contrast on white */
+  --terminal-bg: #FFFFFF;
 }
 
-html.light body {
-  background-color: #f8fafc;
-  color: #0f172a;
-}
-
-/* Custom subtle scrollbars */
+/* Crisp 4px developer scrollbars */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 4px;
+  height: 4px;
 }
 
 ::-webkit-scrollbar-track {
@@ -26,22 +40,32 @@ html.light body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #293241;
-  border-radius: 3px;
+  background: rgb(var(--color-border));
+  border-radius: 2px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #3b475c;
+  background: rgb(var(--color-secondary-text));
 }
 
-/* Ensure xterm fills container cleanly */
+/* Keyboard keycap badge utility */
+.kbd-badge {
+  @apply inline-flex items-center justify-center px-1.5 py-0.5 text-[10px] font-mono leading-none text-secondaryText bg-background border border-border rounded-sm;
+}
+
+/* Ensure xterm and its viewport match the active theme background seamlessly */
 .xterm {
   height: 100%;
   width: 100%;
-  padding: 6px 8px;
+  padding: var(--terminal-padding, 8px);
+  background-color: var(--terminal-bg) !important;
+}
+
+.xterm .xterm-viewport,
+.xterm .xterm-screen {
+  background-color: var(--terminal-bg) !important;
 }
 
 .xterm-viewport {
   overflow-y: auto !important;
 }
-

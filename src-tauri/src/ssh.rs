@@ -24,6 +24,7 @@ use crate::error::{AppError, AppResult};
 use crate::models::{
     AuthMethod, ConnectSshRequest, HostKeyChallengeEvent, HostKeyDecision, HostKeyStatus,
     SessionInfo, SessionState, SshClosedEvent, SshErrorEvent, SshOutputEvent, SshStatusEvent,
+    SshTelemetryEvent,
 };
 use crate::validation::{format_host_identity, validate_terminal_dimensions};
 
@@ -34,6 +35,7 @@ pub trait SessionEventSink: Send + Sync {
     fn emit_error(&self, event: SshErrorEvent);
     fn emit_closed(&self, event: SshClosedEvent);
     fn emit_host_key_challenge(&self, event: HostKeyChallengeEvent);
+    fn emit_telemetry(&self, event: SshTelemetryEvent);
 }
 
 #[cfg(feature = "desktop")]
@@ -68,6 +70,10 @@ impl SessionEventSink for TauriEventSink {
 
     fn emit_host_key_challenge(&self, event: HostKeyChallengeEvent) {
         let _ = self.app.emit("ssh:host-key-challenge", event);
+    }
+
+    fn emit_telemetry(&self, event: SshTelemetryEvent) {
+        let _ = self.app.emit("ssh:telemetry", event);
     }
 }
 
@@ -477,7 +483,9 @@ impl SessionManager {
     ) -> AppResult<()> {
         let ssh_config = Arc::new(client::Config {
             inactivity_timeout: Some(Duration::from_secs(3600)),
-            keepalive_interval: Some(Duration::from_secs(30)),
+            keepalive_interval: Some(Duration::from_secs(
+                settings.keepalive_interval_secs.clamp(5, 300),
+            )),
             keepalive_max: 3,
             ..Default::default()
         });
@@ -658,6 +666,12 @@ impl SessionManager {
         .await;
 
         let mut close_reason = "Session closed by remote host.".to_string();
+        let telemetry_enabled = settings.telemetry_enabled;
+        let mut telemetry_interval = tokio::time::interval(Duration::from_secs(
+            settings.telemetry_interval_secs.clamp(1, 30),
+        ));
+        telemetry_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut prev_telemetry_sample: Option<RawLinuxSample> = None;
 
         // Main asynchronous I/O loop for this session
         loop {
@@ -680,6 +694,32 @@ impl SessionManager {
                             close_reason = "Disconnected by user.".to_string();
                             break;
                         }
+                    }
+                }
+                _ = telemetry_interval.tick(), if telemetry_enabled => {
+                    if let Ok(Some(raw_sample)) = poll_remote_telemetry(&handle).await {
+                        if let Some(ref prev) = prev_telemetry_sample {
+                            let event = compute_telemetry_delta(session_id, prev, &raw_sample);
+                            self.sink.emit_telemetry(event);
+                        } else {
+                            // First sample: emit immediate memory usage with 0% initial delta
+                            let mem_used = raw_sample.mem_total_bytes.saturating_sub(raw_sample.mem_available_bytes);
+                            let mem_pct = if raw_sample.mem_total_bytes > 0 {
+                                ((mem_used as f64 / raw_sample.mem_total_bytes as f64) * 100.0) as f32
+                            } else {
+                                0.0
+                            };
+                            self.sink.emit_telemetry(SshTelemetryEvent {
+                                session_id: session_id.to_string(),
+                                cpu_percent: 0.0,
+                                mem_used_bytes: mem_used,
+                                mem_total_bytes: raw_sample.mem_total_bytes,
+                                mem_percent: mem_pct.clamp(0.0, 100.0),
+                                net_rx_bytes_per_sec: 0,
+                                net_tx_bytes_per_sec: 0,
+                            });
+                        }
+                        prev_telemetry_sample = Some(raw_sample);
                     }
                 }
                 msg = channel.wait() => {
@@ -770,5 +810,229 @@ impl From<russh::Error> for AppError {
         } else {
             AppError::SshProtocol(msg)
         }
+    }
+}
+
+const TELEMETRY_CMD: &str = "head -n 1 /proc/stat 2>/dev/null; echo '---MEM---'; grep -E '^(MemTotal|MemAvailable|MemFree|Buffers|Cached):' /proc/meminfo 2>/dev/null; echo '---NET---'; cat /proc/net/dev 2>/dev/null";
+
+#[derive(Debug, Clone)]
+pub struct RawLinuxSample {
+    pub timestamp: std::time::Instant,
+    pub cpu_total: u64,
+    pub cpu_idle: u64,
+    pub mem_total_bytes: u64,
+    pub mem_available_bytes: u64,
+    pub net_rx_bytes: u64,
+    pub net_tx_bytes: u64,
+}
+
+async fn poll_remote_telemetry(
+    handle: &Handle<SshClientHandler>,
+) -> AppResult<Option<RawLinuxSample>> {
+    let poll_future = async {
+        let mut exec_channel = handle.channel_open_session().await.ok()?;
+        exec_channel.exec(true, TELEMETRY_CMD).await.ok()?;
+
+        let mut output = Vec::with_capacity(2048);
+        while let Some(msg) = exec_channel.wait().await {
+            match msg {
+                ChannelMsg::Data { ref data } => {
+                    if output.len() + data.len() <= 32 * 1024 {
+                        output.extend_from_slice(data);
+                    }
+                }
+                ChannelMsg::Eof | ChannelMsg::Close => break,
+                _ => {}
+            }
+        }
+        let text = String::from_utf8_lossy(&output);
+        parse_linux_telemetry_snapshot(&text, std::time::Instant::now())
+    };
+
+    match timeout(Duration::from_millis(1500), poll_future).await {
+        Ok(res) => Ok(res),
+        Err(_) => Ok(None),
+    }
+}
+
+pub fn parse_linux_telemetry_snapshot(
+    raw: &str,
+    timestamp: std::time::Instant,
+) -> Option<RawLinuxSample> {
+    let mem_split: Vec<&str> = raw.split("---MEM---").collect();
+    if mem_split.len() < 2 {
+        return None;
+    }
+    let cpu_section = mem_split[0];
+    let rest_split: Vec<&str> = mem_split[1].split("---NET---").collect();
+    let mem_section = rest_split[0];
+    let net_section = if rest_split.len() > 1 {
+        rest_split[1]
+    } else {
+        ""
+    };
+
+    // 1. Parse /proc/stat first line: "cpu  user nice system idle iowait irq softirq steal ..."
+    let mut cpu_total = 0u64;
+    let mut cpu_idle = 0u64;
+    for line in cpu_section.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("cpu ") {
+            let parts: Vec<u64> = trimmed
+                .split_whitespace()
+                .skip(1)
+                .filter_map(|s| s.parse::<u64>().ok())
+                .collect();
+            if parts.len() >= 4 {
+                cpu_total = parts.iter().sum();
+                cpu_idle = parts[3] + parts.get(4).copied().unwrap_or(0);
+            }
+            break;
+        }
+    }
+
+    if cpu_total == 0 {
+        return None;
+    }
+
+    // 2. Parse /proc/meminfo (values are in kB)
+    let mut mem_total_kb = 0u64;
+    let mut mem_avail_kb: Option<u64> = None;
+    let mut mem_free_kb = 0u64;
+    let mut buffers_kb = 0u64;
+    let mut cached_kb = 0u64;
+
+    for line in mem_section.lines() {
+        let mut parts = line.split_whitespace();
+        let Some(key) = parts.next() else { continue };
+        let Some(val_str) = parts.next() else { continue };
+        let Ok(val) = val_str.parse::<u64>() else { continue };
+        match key {
+            "MemTotal:" => mem_total_kb = val,
+            "MemAvailable:" => mem_avail_kb = Some(val),
+            "MemFree:" => mem_free_kb = val,
+            "Buffers:" => buffers_kb = val,
+            "Cached:" => cached_kb = val,
+            _ => {}
+        }
+    }
+
+    let resolved_avail_kb = mem_avail_kb.unwrap_or(mem_free_kb + buffers_kb + cached_kb);
+
+    // 3. Parse /proc/net/dev (sum non-loopback interfaces)
+    let mut net_rx_bytes = 0u64;
+    let mut net_tx_bytes = 0u64;
+    for line in net_section.lines() {
+        let Some((iface, stats)) = line.split_once(':') else {
+            continue;
+        };
+        let iface_name = iface.trim();
+        if iface_name == "lo" || iface_name.is_empty() {
+            continue;
+        }
+        let cols: Vec<u64> = stats
+            .split_whitespace()
+            .filter_map(|s| s.parse::<u64>().ok())
+            .collect();
+        if cols.len() >= 9 {
+            net_rx_bytes = net_rx_bytes.saturating_add(cols[0]);
+            net_tx_bytes = net_tx_bytes.saturating_add(cols[8]);
+        }
+    }
+
+    Some(RawLinuxSample {
+        timestamp,
+        cpu_total,
+        cpu_idle,
+        mem_total_bytes: mem_total_kb * 1024,
+        mem_available_bytes: resolved_avail_kb * 1024,
+        net_rx_bytes,
+        net_tx_bytes,
+    })
+}
+
+pub fn compute_telemetry_delta(
+    session_id: &str,
+    prev: &RawLinuxSample,
+    curr: &RawLinuxSample,
+) -> SshTelemetryEvent {
+    let total_delta = curr.cpu_total.saturating_sub(prev.cpu_total);
+    let idle_delta = curr.cpu_idle.saturating_sub(prev.cpu_idle);
+    let cpu_percent = if total_delta > 0 {
+        let busy = total_delta.saturating_sub(idle_delta);
+        ((busy as f64 / total_delta as f64) * 100.0) as f32
+    } else {
+        0.0
+    };
+
+    let mem_used_bytes = curr
+        .mem_total_bytes
+        .saturating_sub(curr.mem_available_bytes);
+    let mem_percent = if curr.mem_total_bytes > 0 {
+        ((mem_used_bytes as f64 / curr.mem_total_bytes as f64) * 100.0) as f32
+    } else {
+        0.0
+    };
+
+    let elapsed_secs = curr
+        .timestamp
+        .saturating_duration_since(prev.timestamp)
+        .as_secs_f64()
+        .max(0.2);
+
+    let rx_delta = curr.net_rx_bytes.saturating_sub(prev.net_rx_bytes);
+    let tx_delta = curr.net_tx_bytes.saturating_sub(prev.net_tx_bytes);
+
+    SshTelemetryEvent {
+        session_id: session_id.to_string(),
+        cpu_percent: cpu_percent.clamp(0.0, 100.0),
+        mem_used_bytes,
+        mem_total_bytes: curr.mem_total_bytes,
+        mem_percent: mem_percent.clamp(0.0, 100.0),
+        net_rx_bytes_per_sec: (rx_delta as f64 / elapsed_secs) as u64,
+        net_tx_bytes_per_sec: (tx_delta as f64 / elapsed_secs) as u64,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_and_compute_linux_telemetry() {
+        let t0 = std::time::Instant::now();
+        let raw_1 = "\
+cpu  1000 0 500 8500 0 0 0 0 0 0
+---MEM---
+MemTotal:        8192000 kB
+MemFree:         2048000 kB
+MemAvailable:    6144000 kB
+---NET---
+Inter-|   Receive                                                |  Transmit
+ face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed
+    lo:   50000     100    0    0    0     0          0         0    50000     100    0    0    0     0       0          0
+  eth0: 1000000    1000    0    0    0     0          0         0   500000     500    0    0    0     0       0          0
+";
+        let raw_2 = "\
+cpu  1250 0 550 8700 0 0 0 0 0 0
+---MEM---
+MemTotal:        8192000 kB
+MemFree:         1024000 kB
+MemAvailable:    4096000 kB
+---NET---
+  eth0: 1204800    1200    0    0    0     0          0         0   540960     550    0    0    0     0       0          0
+";
+        let s1 = parse_linux_telemetry_snapshot(raw_1, t0).unwrap();
+        let s2 = parse_linux_telemetry_snapshot(raw_2, t0 + Duration::from_secs(2)).unwrap();
+        let delta = compute_telemetry_delta("sess-1", &s1, &s2);
+
+        // Total delta = 10500 - 10000 = 500; Idle delta = 8700 - 8500 = 200; Busy = 300 -> 60%
+        assert!((delta.cpu_percent - 60.0).abs() < 0.1);
+        // Mem used = 8192000 - 4096000 kB = 50%
+        assert!((delta.mem_percent - 50.0).abs() < 0.1);
+        // Net RX = (1204800 - 1000000) / 2s = 102400 B/s
+        assert_eq!(delta.net_rx_bytes_per_sec, 102400);
+        // Net TX = (540960 - 500000) / 2s = 20480 B/s
+        assert_eq!(delta.net_tx_bytes_per_sec, 20480);
     }
 }

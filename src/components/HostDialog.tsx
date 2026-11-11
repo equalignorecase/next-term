@@ -430,7 +430,7 @@ export const HostDialog: React.FC<HostDialogProps> = ({
             <button
               type="submit"
               disabled={isSubmitting}
-              className="px-4 py-1.5 text-xs font-semibold bg-accent text-slate-950 hover:bg-blue-400 rounded transition-colors disabled:opacity-50"
+              className="px-4 py-1.5 text-xs font-mono font-semibold bg-accent text-slate-950 hover:bg-emerald-400 rounded-xs transition-colors disabled:opacity-50"
             >
               {isSubmitting
                 ? "Saving..."

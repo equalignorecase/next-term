@@ -208,15 +208,36 @@ pub struct SshClosedEvent {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SshTelemetryEvent {
+    pub session_id: String,
+    pub cpu_percent: f32,
+    pub mem_used_bytes: u64,
+    pub mem_total_bytes: u64,
+    pub mem_percent: f32,
+    pub net_rx_bytes_per_sec: u64,
+    pub net_tx_bytes_per_sec: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
 pub struct AppSettings {
     pub theme: String,
+    pub accent_color: String,
     pub terminal_font_family: String,
     pub terminal_font_size: u16,
     pub terminal_line_height: f32,
+    pub terminal_padding: u16,
     pub cursor_style: String,
     pub cursor_blink: bool,
     pub scrollback: u32,
+    pub copy_on_select: bool,
+    pub right_click_behavior: String,
+    pub enable_bell: bool,
     pub connection_timeout_secs: u64,
+    pub keepalive_interval_secs: u64,
+    pub telemetry_enabled: bool,
+    pub telemetry_interval_secs: u64,
+    pub ui_density: String,
     pub terminal_type: String,
     pub default_ssh_port: u16,
 }
@@ -224,14 +245,23 @@ pub struct AppSettings {
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
-            theme: "dark".to_string(),
+            theme: "obsidian".to_string(),
+            accent_color: "#10B981".to_string(),
             terminal_font_family: "JetBrains Mono, Cascadia Code, Consolas, monospace".to_string(),
             terminal_font_size: 14,
             terminal_line_height: 1.25,
+            terminal_padding: 8,
             cursor_style: "block".to_string(),
             cursor_blink: true,
             scrollback: 5000,
+            copy_on_select: false,
+            right_click_behavior: "context_menu".to_string(),
+            enable_bell: false,
             connection_timeout_secs: 15,
+            keepalive_interval_secs: 30,
+            telemetry_enabled: true,
+            telemetry_interval_secs: 2,
+            ui_density: "compact".to_string(),
             terminal_type: "xterm-256color".to_string(),
             default_ssh_port: 22,
         }

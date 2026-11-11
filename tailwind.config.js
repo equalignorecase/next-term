@@ -4,16 +4,20 @@ export default {
   content: ["./index.html", "./src/**/*.{ts,tsx}"],
   theme: {
     extend: {
+      borderRadius: {
+        xs: "2px",
+      },
       colors: {
-        background: "#0B0F16",
-        sidebar: "#111827",
-        surface: "#151B27",
-        elevated: "#1E293B",
-        border: "#293241",
-        primaryText: "#F8FAFC",
-        secondaryText: "#94A3B8",
-        accent: "#60A5FA",
-        success: "#22C55E",
+        background: "rgb(var(--color-background) / <alpha-value>)",
+        sidebar: "rgb(var(--color-sidebar) / <alpha-value>)",
+        surface: "rgb(var(--color-surface) / <alpha-value>)",
+        elevated: "rgb(var(--color-elevated) / <alpha-value>)",
+        border: "rgb(var(--color-border) / <alpha-value>)",
+        primaryText: "rgb(var(--color-primary-text) / <alpha-value>)",
+        secondaryText: "rgb(var(--color-secondary-text) / <alpha-value>)",
+        accent: "rgb(var(--color-accent) / <alpha-value>)",
+        cyber: "#38BDF8",
+        success: "rgb(var(--color-accent) / <alpha-value>)",
         warning: "#F59E0B",
         error: "#EF4444",
       },
@@ -38,4 +42,3 @@ export default {
   },
   plugins: [],
 };
-

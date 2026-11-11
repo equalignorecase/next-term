@@ -110,7 +110,7 @@ export const SecretPromptDialog: React.FC = () => {
             <button
               type="submit"
               disabled={!secret}
-              className="px-4 py-1.5 text-xs font-semibold bg-accent text-slate-950 hover:bg-blue-400 rounded disabled:opacity-40"
+              className="px-4 py-1.5 text-xs font-mono font-semibold bg-accent text-slate-950 hover:bg-emerald-400 rounded-xs disabled:opacity-40"
             >
               Authenticate
             </button>

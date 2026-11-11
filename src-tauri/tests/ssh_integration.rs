@@ -17,6 +17,7 @@ use nexterm_lib::db::Database;
 use nexterm_lib::models::{
     AuthMethod, ConnectSshRequest, HostInput, HostKeyChallengeEvent, HostKeyDecision,
     HostKeyStatus, SessionState, SshClosedEvent, SshErrorEvent, SshOutputEvent, SshStatusEvent,
+    SshTelemetryEvent,
 };
 use nexterm_lib::ssh::{SessionEventSink, SessionManager};
 
@@ -27,6 +28,7 @@ struct TestEventCollector {
     errors: Mutex<Vec<SshErrorEvent>>,
     closed: Mutex<Vec<SshClosedEvent>>,
     challenges: Mutex<Vec<HostKeyChallengeEvent>>,
+    telemetries: Mutex<Vec<SshTelemetryEvent>>,
     notify: Notify,
 }
 
@@ -53,6 +55,11 @@ impl SessionEventSink for TestEventCollector {
 
     fn emit_host_key_challenge(&self, event: HostKeyChallengeEvent) {
         self.challenges.lock().unwrap().push(event);
+        self.notify.notify_waiters();
+    }
+
+    fn emit_telemetry(&self, event: SshTelemetryEvent) {
+        self.telemetries.lock().unwrap().push(event);
         self.notify.notify_waiters();
     }
 }
@@ -213,6 +220,20 @@ impl server::Handler for EmbeddedSshSession {
             channel,
             CryptoVec::from_slice(b"Welcome to NexTerm Test SSH Server\r\n$ "),
         )?;
+        Ok(())
+    }
+
+    async fn exec_request(
+        &mut self,
+        channel: ChannelId,
+        _data: &[u8],
+        session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        session.channel_success(channel)?;
+        let mock_proc = b"cpu  1200 0 400 8400 0 0 0 0 0 0\n---MEM---\nMemTotal: 8192000 kB\nMemAvailable: 6144000 kB\n---NET---\neth0: 2048000 100 0 0 0 0 0 0 1024000 50 0 0 0 0 0 0\n";
+        session.data(channel, CryptoVec::from_slice(mock_proc))?;
+        session.eof(channel)?;
+        session.close(channel)?;
         Ok(())
     }
 

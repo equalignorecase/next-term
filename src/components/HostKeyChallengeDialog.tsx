@@ -162,10 +162,10 @@ export const HostKeyChallengeDialog: React.FC<HostKeyChallengeDialogProps> = ({
               type="button"
               disabled={isSubmitting || (isChanged && !confirmChangedOverride)}
               onClick={() => void handleDecision(true)}
-              className={`flex items-center gap-1.5 px-4 py-1.5 rounded font-semibold transition-colors disabled:opacity-40 ${
+              className={`flex items-center gap-1.5 px-4 py-1.5 rounded-xs font-mono font-semibold transition-colors disabled:opacity-40 ${
                 isChanged
                   ? "bg-error text-white hover:bg-red-500"
-                  : "bg-accent text-slate-950 hover:bg-blue-400"
+                  : "bg-accent text-slate-950 hover:bg-emerald-400"
               }`}
             >
               <Check className="w-3.5 h-3.5" />

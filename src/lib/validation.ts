@@ -63,16 +63,40 @@ export const hostInputSchema = z
     }
   });
 
+const hexColorRegex = /^#[0-9a-fA-F]{6}$/;
+
 export const appSettingsSchema = z.object({
-  theme: z.enum(["dark", "light"]),
+  theme: z.enum([
+    "obsidian",
+    "dark",
+    "tokyo-night",
+    "catppuccin",
+    "dracula",
+    "nord",
+    "gruvbox",
+    "light",
+    "solarized-light",
+  ]),
+  accentColor: z
+    .string()
+    .trim()
+    .regex(hexColorRegex, "Accent color must be a valid 6-digit hex (#RRGGBB)"),
   terminalFontFamily: z.string().trim().min(1).max(256),
   terminalFontSize: z.number().int().min(8).max(36),
   terminalLineHeight: z.number().min(1.0).max(2.5),
+  terminalPadding: z.number().int().min(0).max(32),
   cursorStyle: z.enum(["block", "underline", "bar"]),
   cursorBlink: z.boolean(),
   scrollback: z.number().int().min(100).max(100000),
+  copyOnSelect: z.boolean(),
+  rightClickBehavior: z.enum(["context_menu", "paste"]),
+  enableBell: z.boolean(),
   connectionTimeoutSecs: z.number().int().min(3).max(300),
+  keepaliveIntervalSecs: z.number().int().min(5).max(300),
   terminalType: z.enum(["xterm-256color", "xterm", "vt100"]),
   defaultSshPort: z.number().int().min(1).max(65535),
+  telemetryEnabled: z.boolean(),
+  telemetryIntervalSecs: z.number().int().min(1).max(30),
+  uiDensity: z.enum(["compact", "comfortable"]),
 });
 
