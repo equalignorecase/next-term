@@ -8,18 +8,23 @@ import {
   Lock,
   ArrowRight,
   PanelLeft,
+  FolderTree,
+  HardDriveUpload,
+  CheckCircle2,
 } from "lucide-react";
 
 import { CommandPalette } from "@/components/CommandPalette";
 import { HostDialog } from "@/components/HostDialog";
 import { HostKeyChallengeDialog } from "@/components/HostKeyChallengeDialog";
 import { SecretPromptDialog } from "@/components/SecretPromptDialog";
+import { SftpDrawer } from "@/components/SftpDrawer";
 import { Sidebar } from "@/components/Sidebar";
 import { SettingsDialog } from "@/components/SettingsDialog";
 import { StatusBar } from "@/components/StatusBar";
 import { TerminalPane } from "@/components/TerminalPane";
 import { ipc } from "@/lib/ipc";
 import { applyThemeToDocument } from "@/lib/themes";
+import { formatError } from "@/lib/utils";
 import { useAppStore } from "@/store/useAppStore";
 import type { Host } from "@/types/models";
 
@@ -47,6 +52,13 @@ export const App: React.FC = () => {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sftpOpen, setSftpOpen] = useState(false);
+  const [sftpPaths, setSftpPaths] = useState<Record<string, string>>({});
+  const [sftpRefreshToken, setSftpRefreshToken] = useState(0);
+  const [isDraggingFiles, setIsDraggingFiles] = useState(false);
+  const [dropBanner, setDropBanner] = useState<string | null>(null);
+
+  const activeTab = tabs.find((t) => t.sessionId === activeTabId) ?? null;
 
   // Sync theme preset, accent color, and terminal padding on document root
   useEffect(() => {
@@ -118,11 +130,78 @@ export const App: React.FC = () => {
       } else if (key === "w" && activeTabId) {
         e.preventDefault();
         void closeTab(activeTabId);
+      } else if (e.shiftKey && key === "e" && activeTabId) {
+        e.preventDefault();
+        setSftpOpen((prev) => !prev);
       }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [activeTabId, closeTab]);
+
+  // Listen for OS File Drag & Drop onto the window to upload directly via SFTP
+  useEffect(() => {
+    const unlisteners: Array<() => void> = [];
+    let mounted = true;
+
+    void Promise.all([
+      ipc.onWindowDragEnter(() => {
+        if (useAppStore.getState().activeTabId) {
+          setIsDraggingFiles(true);
+        }
+      }),
+      ipc.onWindowDragLeave(() => {
+        setIsDraggingFiles(false);
+      }),
+      ipc.onWindowDragDrop(async ({ paths }) => {
+        setIsDraggingFiles(false);
+        if (!paths || paths.length === 0) return;
+
+        const state = useAppStore.getState();
+        const currTab = state.tabs.find(
+          (t) => t.sessionId === state.activeTabId
+        );
+        if (!currTab || currTab.state !== "Connected") return;
+
+        const targetDir = sftpPaths[currTab.sessionId] || ".";
+        setDropBanner(
+          `Uploading ${paths.length} file(s) to ${targetDir === "." ? "~" : targetDir}...`
+        );
+        try {
+          let lastRemote = "";
+          for (const localPath of paths) {
+            const res = await ipc.sftpUploadFile(
+              currTab.sessionId,
+              localPath,
+              targetDir
+            );
+            lastRemote = res.remotePath;
+          }
+          setDropBanner(
+            paths.length === 1
+              ? `Uploaded → ${lastRemote}`
+              : `Uploaded ${paths.length} files to ${targetDir === "." ? "~" : targetDir}`
+          );
+          setSftpRefreshToken((n) => n + 1);
+          setTimeout(() => setDropBanner(null), 4000);
+        } catch (err) {
+          setDropBanner(`Upload error: ${formatError(err).message}`);
+          setTimeout(() => setDropBanner(null), 5000);
+        }
+      }),
+    ]).then((fns) => {
+      if (!mounted) {
+        fns.forEach((fn) => fn());
+      } else {
+        unlisteners.push(...fns);
+      }
+    });
+
+    return () => {
+      mounted = false;
+      unlisteners.forEach((fn) => fn());
+    };
+  }, [sftpPaths]);
 
   const openAddHost = () => {
     setEditingHost(null);
@@ -245,6 +324,22 @@ export const App: React.FC = () => {
 
               {/* Right Quick Actions in Tab Strip */}
               <div className="flex items-center px-2 gap-1.5 shrink-0 border-l border-border bg-background/30">
+                {activeTab && (
+                  <button
+                    type="button"
+                    onClick={() => setSftpOpen((v) => !v)}
+                    className={`flex items-center gap-1.5 px-2 py-1 rounded-xs border text-[10px] transition-colors ${
+                      sftpOpen
+                        ? "bg-accent/15 border-accent/50 text-accent font-semibold"
+                        : "bg-surface hover:bg-elevated border-border text-secondaryText hover:text-primaryText"
+                    }`}
+                    title="Toggle SFTP File Manager Drawer (Ctrl+Shift+E)"
+                    aria-label="Toggle SFTP Files"
+                  >
+                    <FolderTree className="w-3 h-3 text-accent" />
+                    <span>SFTP Files</span>
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() => setPaletteOpen(true)}
@@ -258,8 +353,39 @@ export const App: React.FC = () => {
             </div>
           )}
 
-          {/* Terminal Area or Keyboard-First Minimal Empty State */}
-          <div className="flex-1 relative flex flex-col min-h-0 overflow-hidden">
+          {/* Drag & Drop Upload Status Pill */}
+          {dropBanner && (
+            <div className="flex items-center justify-between px-3 py-1.5 bg-accent/15 border-b border-accent/40 text-xs font-mono text-accent">
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                <span>{dropBanner}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setDropBanner(null)}
+                className="p-0.5 hover:text-primaryText"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
+
+          {/* Terminal Area + Optional Right SFTP Drawer */}
+          <div className="flex-1 relative flex min-h-0 overflow-hidden">
+            {/* Full-Pane Drag-and-Drop Overlay when dragging PC files over an active SSH session */}
+            {isDraggingFiles && activeTab?.state === "Connected" && (
+              <div className="absolute inset-2 z-40 rounded-md border-2 border-dashed border-accent bg-background/85 backdrop-blur-xs flex flex-col items-center justify-center gap-2 font-mono pointer-events-none">
+                <HardDriveUpload className="w-8 h-8 text-accent animate-bounce" />
+                <div className="text-sm font-bold text-primaryText">
+                  Drop file(s) to upload via SFTP
+                </div>
+                <div className="text-xs text-accent">
+                  Destination: {sftpPaths[activeTab.sessionId] || "~ (Home Directory)"}
+                </div>
+              </div>
+            )}
+
+            <div className="flex-1 relative flex flex-col min-w-0 min-h-0 overflow-hidden">
             {tabs.length === 0 ? (
               <div className="flex-1 flex flex-col items-center justify-center p-6 select-none font-mono">
                 <div className="w-full max-w-md space-y-6">
@@ -395,6 +521,24 @@ export const App: React.FC = () => {
                 />
               ))
             )}
+            </div>
+
+            {activeTab && (
+              <SftpDrawer
+                sessionId={activeTab.sessionId}
+                isConnected={activeTab.state === "Connected"}
+                open={sftpOpen}
+                onClose={() => setSftpOpen(false)}
+                currentPath={sftpPaths[activeTab.sessionId] ?? "."}
+                onPathChange={(nextPath) =>
+                  setSftpPaths((prev) => ({
+                    ...prev,
+                    [activeTab.sessionId]: nextPath,
+                  }))
+                }
+                externalRefreshToken={sftpRefreshToken}
+              />
+            )}
           </div>
         </main>
       </div>
@@ -412,6 +556,7 @@ export const App: React.FC = () => {
         onAddHost={openAddHost}
         onOpenSettings={() => setSettingsOpen(true)}
         onToggleSidebar={() => setSidebarCollapsed((v) => !v)}
+        onToggleSftp={() => setSftpOpen((v) => !v)}
       />
 
       {/* Modals & Security Challenge Dialogs */}

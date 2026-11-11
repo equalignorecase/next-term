@@ -130,6 +130,28 @@ export interface SshTelemetryEvent {
   netTxBytesPerSec: number;
 }
 
+export type SftpEntryKind = "file" | "directory" | "symlink" | "other";
+
+export interface SftpEntry {
+  name: string;
+  path: string;
+  kind: SftpEntryKind;
+  size: number;
+  modifiedAt: number | null;
+  permissions: number | null;
+}
+
+export interface SftpDirectoryListing {
+  currentPath: string;
+  entries: SftpEntry[];
+}
+
+export interface SftpTransferResult {
+  remotePath: string;
+  localPath: string;
+  bytesTransferred: number;
+}
+
 export type ThemePresetId =
   | "obsidian"
   | "tokyo-night"

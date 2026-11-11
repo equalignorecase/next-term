@@ -218,6 +218,41 @@ pub struct SshTelemetryEvent {
     pub net_tx_bytes_per_sec: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SftpEntryKind {
+    File,
+    Directory,
+    Symlink,
+    Other,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SftpEntry {
+    pub name: String,
+    pub path: String,
+    pub kind: SftpEntryKind,
+    pub size: u64,
+    pub modified_at: Option<u64>,
+    pub permissions: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SftpDirectoryListing {
+    pub current_path: String,
+    pub entries: Vec<SftpEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SftpTransferResult {
+    pub remote_path: String,
+    pub local_path: String,
+    pub bytes_transferred: u64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct AppSettings {

@@ -33,6 +33,16 @@ vi.mock("@/lib/ipc", () => ({
     getSettings: vi.fn(),
     updateSettings: vi.fn(),
     pickPrivateKeyFile: vi.fn(),
+    sftpListDir: vi.fn(),
+    sftpUploadFile: vi.fn(),
+    sftpDownloadFile: vi.fn(),
+    sftpCreateDir: vi.fn(),
+    sftpDeleteEntry: vi.fn(),
+    pickLocalFilesForUpload: vi.fn(),
+    pickLocalSavePath: vi.fn(),
+    onWindowDragDrop: vi.fn(() => Promise.resolve(() => {})),
+    onWindowDragEnter: vi.fn(() => Promise.resolve(() => {})),
+    onWindowDragLeave: vi.fn(() => Promise.resolve(() => {})),
     onSshStatus: vi.fn(() => Promise.resolve(() => {})),
     onSshOutput: vi.fn(() => Promise.resolve(() => {})),
     onSshError: vi.fn(() => Promise.resolve(() => {})),
@@ -432,5 +442,75 @@ describe("NexTerm Host Management, Multi-Tab Lifecycle & Settings UI", () => {
     expect(
       screen.getByRole("menuitem", { name: /Clear Terminal/i })
     ).toBeInTheDocument();
+  });
+
+  it("opens SFTP File Manager drawer, lists remote files, and uploads a file from PC", async () => {
+    const user = userEvent.setup();
+    vi.mocked(ipc.connectSsh).mockImplementation(async (req) => ({
+      sessionId: req.sessionId ?? "sess-sftp",
+      hostId: req.hostId,
+      hostName: "Prod Bastion",
+      hostname: "bastion.example.com",
+      port: 22,
+      username: "ops",
+      state: "Connected",
+      cols: req.cols,
+      rows: req.rows,
+      connectedAt: "2026-01-01T00:00:00Z",
+      errorMessage: null,
+    }));
+
+    vi.mocked(ipc.sftpListDir).mockResolvedValue({
+      currentPath: "/home/ops",
+      entries: [
+        {
+          name: "deploy.sh",
+          path: "/home/ops/deploy.sh",
+          kind: "file",
+          size: 2048,
+          modifiedAt: 1700000000,
+          permissions: 0o755,
+        },
+      ],
+    });
+    vi.mocked(ipc.pickLocalFilesForUpload).mockResolvedValue([
+      "E:\\release\\bundle.tar.gz",
+    ]);
+    vi.mocked(ipc.sftpUploadFile).mockResolvedValue({
+      remotePath: "/home/ops/bundle.tar.gz",
+      localPath: "E:\\release\\bundle.tar.gz",
+      bytesTransferred: 4096,
+    });
+
+    render(<App />);
+    await screen.findAllByText("Prod Bastion");
+
+    await user.click(
+      screen.getByRole("button", { name: "Connect to Prod Bastion" })
+    );
+
+    const activeSessionId = useAppStore.getState().tabs[0].sessionId;
+    act(() => {
+      useAppStore
+        .getState()
+        .handleStatusEvent(activeSessionId, "Connected", "Connected");
+    });
+
+    // Open SFTP Drawer from Tab Bar button
+    await user.click(screen.getByRole("button", { name: /Toggle SFTP Files/i }));
+
+    expect(await screen.findByTestId("sftp-drawer")).toBeInTheDocument();
+    expect(await screen.findByText("deploy.sh")).toBeInTheDocument();
+
+    // Click Upload button inside SFTP Drawer
+    await user.click(screen.getByRole("button", { name: /Upload/i }));
+
+    await waitFor(() => {
+      expect(ipc.sftpUploadFile).toHaveBeenCalledWith(
+        activeSessionId,
+        "E:\\release\\bundle.tar.gz",
+        "/home/ops"
+      );
+    });
   });
 });

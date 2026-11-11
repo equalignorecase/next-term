@@ -2754,6 +2754,7 @@ dependencies = [
  "rand",
  "russh",
  "russh-keys",
+ "russh-sftp",
  "serde",
  "serde_json",
  "sha2",

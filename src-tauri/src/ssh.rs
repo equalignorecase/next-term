@@ -23,9 +23,11 @@ use crate::db::Database;
 use crate::error::{AppError, AppResult};
 use crate::models::{
     AuthMethod, ConnectSshRequest, HostKeyChallengeEvent, HostKeyDecision, HostKeyStatus,
-    SessionInfo, SessionState, SshClosedEvent, SshErrorEvent, SshOutputEvent, SshStatusEvent,
-    SshTelemetryEvent,
+    SessionInfo, SessionState, SftpDirectoryListing, SftpEntry, SftpEntryKind, SftpTransferResult,
+    SshClosedEvent, SshErrorEvent, SshOutputEvent, SshStatusEvent, SshTelemetryEvent,
 };
+use russh_sftp::client::SftpSession;
+use russh_sftp::protocol::FileType;
 use crate::validation::{format_host_identity, validate_terminal_dimensions};
 
 /// Event emitter abstraction so `SessionManager` works in both Tauri runtime and headless Rust integration tests.
@@ -88,6 +90,7 @@ struct ManagedSession {
     cmd_tx: Option<mpsc::Sender<SessionCommand>>,
     cancel_tx: Option<oneshot::Sender<()>>,
     host_key_decision_tx: Option<oneshot::Sender<HostKeyDecision>>,
+    ssh_handle: Option<Arc<Mutex<Handle<SshClientHandler>>>>,
 }
 
 struct SshClientHandler {
@@ -347,6 +350,242 @@ impl SessionManager {
         Ok(())
     }
 
+    async fn open_sftp_session(&self, session_id: &str) -> AppResult<SftpSession> {
+        let shared_handle = {
+            let guard = self.sessions.read().await;
+            let session = guard.get(session_id).ok_or_else(|| {
+                AppError::Session(format!("Active session '{session_id}' not found"))
+            })?;
+            if session.info.state != SessionState::Connected {
+                return Err(AppError::Session(
+                    "Session must be connected before using SFTP.".into(),
+                ));
+            }
+            session
+                .ssh_handle
+                .clone()
+                .ok_or_else(|| AppError::Session("SSH handle unavailable for SFTP.".into()))?
+        };
+
+        let channel = {
+            let h = shared_handle.lock().await;
+            h.channel_open_session()
+                .await
+                .map_err(|e| AppError::SshProtocol(format!("Failed to open SFTP channel: {e}")))?
+        };
+
+        channel
+            .request_subsystem(true, "sftp")
+            .await
+            .map_err(|e| AppError::SshProtocol(format!("SFTP subsystem request failed: {e}")))?;
+
+        SftpSession::new(channel.into_stream())
+            .await
+            .map_err(|e| AppError::SshProtocol(format!("SFTP session initialization failed: {e}")))
+    }
+
+    pub async fn sftp_list_dir(
+        &self,
+        session_id: &str,
+        path: Option<String>,
+    ) -> AppResult<SftpDirectoryListing> {
+        let sftp = self.open_sftp_session(session_id).await?;
+        let requested = path
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty() && *s != "~")
+            .unwrap_or(".");
+
+        let current_path = sftp
+            .canonicalize(requested)
+            .await
+            .unwrap_or_else(|_| requested.to_string());
+
+        let read_dir = sftp
+            .read_dir(&current_path)
+            .await
+            .map_err(|e| AppError::SshProtocol(format!("Failed to list '{current_path}': {e}")))?;
+
+        let mut entries: Vec<SftpEntry> = read_dir
+            .map(|entry| {
+                let meta = entry.metadata();
+                let kind = match entry.file_type() {
+                    FileType::Dir => SftpEntryKind::Directory,
+                    FileType::File => SftpEntryKind::File,
+                    FileType::Symlink => SftpEntryKind::Symlink,
+                    _ => SftpEntryKind::Other,
+                };
+                SftpEntry {
+                    name: entry.file_name(),
+                    path: entry.path(),
+                    kind,
+                    size: meta.size.unwrap_or(0),
+                    modified_at: meta.mtime.map(u64::from),
+                    permissions: meta.permissions,
+                }
+            })
+            .collect();
+
+        entries.sort_by(|a, b| match (a.kind, b.kind) {
+            (SftpEntryKind::Directory, SftpEntryKind::Directory) => {
+                a.name.to_lowercase().cmp(&b.name.to_lowercase())
+            }
+            (SftpEntryKind::Directory, _) => std::cmp::Ordering::Less,
+            (_, SftpEntryKind::Directory) => std::cmp::Ordering::Greater,
+            _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+        });
+
+        let _ = sftp.close().await;
+
+        Ok(SftpDirectoryListing {
+            current_path,
+            entries,
+        })
+    }
+
+    pub async fn sftp_upload_file(
+        &self,
+        session_id: &str,
+        local_path: &str,
+        remote_dir: Option<String>,
+    ) -> AppResult<SftpTransferResult> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let local = Path::new(local_path);
+        if !local.exists() || !local.is_file() {
+            return Err(AppError::Validation(format!(
+                "Local file does not exist: '{local_path}'"
+            )));
+        }
+
+        let file_name = local
+            .file_name()
+            .and_then(|n| n.to_str())
+            .ok_or_else(|| AppError::Validation("Invalid local file name.".into()))?;
+
+        let sftp = self.open_sftp_session(session_id).await?;
+        let target_dir_req = remote_dir
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty() && *s != "~")
+            .unwrap_or(".");
+
+        let canonical_dir = sftp
+            .canonicalize(target_dir_req)
+            .await
+            .unwrap_or_else(|_| target_dir_req.to_string());
+
+        let remote_path = if canonical_dir.ends_with('/') {
+            format!("{canonical_dir}{file_name}")
+        } else {
+            format!("{canonical_dir}/{file_name}")
+        };
+
+        let mut local_file = tokio::fs::File::open(local).await.map_err(|e| {
+            AppError::Validation(format!("Failed to open local file '{local_path}': {e}"))
+        })?;
+
+        let mut remote_file = sftp.create(&remote_path).await.map_err(|e| {
+            AppError::SshProtocol(format!("Failed to create remote file '{remote_path}': {e}"))
+        })?;
+
+        let mut buf = vec![0u8; 64 * 1024];
+        let mut total_bytes = 0u64;
+        loop {
+            let n = local_file.read(&mut buf).await.map_err(|e| {
+                AppError::Validation(format!("Error reading local file '{local_path}': {e}"))
+            })?;
+            if n == 0 {
+                break;
+            }
+            remote_file.write_all(&buf[..n]).await.map_err(|e| {
+                AppError::SshProtocol(format!("Error writing remote file '{remote_path}': {e}"))
+            })?;
+            total_bytes += n as u64;
+        }
+
+        let _ = remote_file.flush().await;
+        let _ = remote_file.shutdown().await;
+        let _ = sftp.close().await;
+
+        Ok(SftpTransferResult {
+            remote_path,
+            local_path: local_path.to_string(),
+            bytes_transferred: total_bytes,
+        })
+    }
+
+    pub async fn sftp_download_file(
+        &self,
+        session_id: &str,
+        remote_path: &str,
+        local_path: &str,
+    ) -> AppResult<SftpTransferResult> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let sftp = self.open_sftp_session(session_id).await?;
+        let mut remote_file = sftp.open(remote_path).await.map_err(|e| {
+            AppError::SshProtocol(format!("Failed to open remote file '{remote_path}': {e}"))
+        })?;
+
+        let mut local_file = tokio::fs::File::create(local_path).await.map_err(|e| {
+            AppError::Validation(format!("Failed to create local file '{local_path}': {e}"))
+        })?;
+
+        let mut buf = vec![0u8; 64 * 1024];
+        let mut total_bytes = 0u64;
+        loop {
+            let n = remote_file.read(&mut buf).await.map_err(|e| {
+                AppError::SshProtocol(format!("Error reading remote file '{remote_path}': {e}"))
+            })?;
+            if n == 0 {
+                break;
+            }
+            local_file.write_all(&buf[..n]).await.map_err(|e| {
+                AppError::Validation(format!("Error writing local file '{local_path}': {e}"))
+            })?;
+            total_bytes += n as u64;
+        }
+
+        let _ = local_file.flush().await;
+        let _ = sftp.close().await;
+
+        Ok(SftpTransferResult {
+            remote_path: remote_path.to_string(),
+            local_path: local_path.to_string(),
+            bytes_transferred: total_bytes,
+        })
+    }
+
+    pub async fn sftp_create_dir(&self, session_id: &str, path: &str) -> AppResult<()> {
+        let sftp = self.open_sftp_session(session_id).await?;
+        sftp.create_dir(path).await.map_err(|e| {
+            AppError::SshProtocol(format!("Failed to create directory '{path}': {e}"))
+        })?;
+        let _ = sftp.close().await;
+        Ok(())
+    }
+
+    pub async fn sftp_delete_entry(
+        &self,
+        session_id: &str,
+        path: &str,
+        is_dir: bool,
+    ) -> AppResult<()> {
+        let sftp = self.open_sftp_session(session_id).await?;
+        if is_dir {
+            sftp.remove_dir(path).await.map_err(|e| {
+                AppError::SshProtocol(format!("Failed to remove directory '{path}': {e}"))
+            })?;
+        } else {
+            sftp.remove_file(path).await.map_err(|e| {
+                AppError::SshProtocol(format!("Failed to remove file '{path}': {e}"))
+            })?;
+        }
+        let _ = sftp.close().await;
+        Ok(())
+    }
+
     /// Initiates a new SSH session and spawns the asynchronous connection and PTY loop.
     pub async fn connect_ssh(&self, req: ConnectSshRequest) -> AppResult<SessionInfo> {
         validate_terminal_dimensions(req.cols, req.rows)?;
@@ -401,6 +640,7 @@ impl SessionManager {
                     cmd_tx: None,
                     cancel_tx: Some(cancel_tx),
                     host_key_decision_tx: None,
+                    ssh_handle: None,
                 },
             );
         }
@@ -648,11 +888,13 @@ impl SessionManager {
 
         // Bounded command queue for backpressure-safe input & resize
         let (cmd_tx, mut cmd_rx) = mpsc::channel::<SessionCommand>(256);
+        let shared_handle = Arc::new(Mutex::new(handle));
         {
             let mut guard = self.sessions.write().await;
             if let Some(session) = guard.get_mut(session_id) {
                 session.cmd_tx = Some(cmd_tx);
                 session.cancel_tx = None;
+                session.ssh_handle = Some(shared_handle.clone());
             }
         }
 
@@ -690,14 +932,15 @@ impl SessionManager {
                         SessionCommand::Disconnect => {
                             let _ = channel.eof().await;
                             let _ = channel.close().await;
-                            let _ = handle.disconnect(Disconnect::ByApplication, "User disconnected", "en").await;
+                            let h = shared_handle.lock().await;
+                            let _ = h.disconnect(Disconnect::ByApplication, "User disconnected", "en").await;
                             close_reason = "Disconnected by user.".to_string();
                             break;
                         }
                     }
                 }
                 _ = telemetry_interval.tick(), if telemetry_enabled => {
-                    if let Ok(Some(raw_sample)) = poll_remote_telemetry(&handle).await {
+                    if let Ok(Some(raw_sample)) = poll_remote_telemetry(&shared_handle).await {
                         if let Some(ref prev) = prev_telemetry_sample {
                             let event = compute_telemetry_delta(session_id, prev, &raw_sample);
                             self.sink.emit_telemetry(event);
@@ -827,10 +1070,13 @@ pub struct RawLinuxSample {
 }
 
 async fn poll_remote_telemetry(
-    handle: &Handle<SshClientHandler>,
+    shared_handle: &Arc<Mutex<Handle<SshClientHandler>>>,
 ) -> AppResult<Option<RawLinuxSample>> {
     let poll_future = async {
-        let mut exec_channel = handle.channel_open_session().await.ok()?;
+        let mut exec_channel = {
+            let h = shared_handle.lock().await;
+            h.channel_open_session().await.ok()?
+        };
         exec_channel.exec(true, TELEMETRY_CMD).await.ok()?;
 
         let mut output = Vec::with_capacity(2048);

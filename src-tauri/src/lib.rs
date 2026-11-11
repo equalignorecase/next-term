@@ -72,6 +72,11 @@ pub fn run() {
             commands::delete_credential,
             commands::get_settings,
             commands::update_settings,
+            commands::sftp_list_dir,
+            commands::sftp_upload_file,
+            commands::sftp_download_file,
+            commands::sftp_create_dir,
+            commands::sftp_delete_entry,
         ])
         .run(tauri::generate_context!())
         .expect("error while running NexTerm application");

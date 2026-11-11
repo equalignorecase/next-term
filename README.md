@@ -12,7 +12,7 @@ SSH Client บนเดสก์ท็อปแบบ Local-first สำหร�
 
 ## เทคโนโลยี (Tech Stack)
 
-- **Frontend**: React 18, TypeScript, Tailwind CSS, Zustand, Zod, `@xterm/xterm`
+- **Frontend**: React 19, TypeScript, Tailwind CSS, Zustand, Zod, `@xterm/xterm`
 - **Backend**: Tauri 2, Rust (`tokio`, `russh`, `russh-keys`), SQLite (`sqlx`), `keyring`
 
 ## คำสั่งใช้งาน (Commands)

@@ -21,6 +21,7 @@ interface CommandPaletteProps {
   onAddHost: () => void;
   onOpenSettings: () => void;
   onToggleSidebar: () => void;
+  onToggleSftp?: () => void;
 }
 
 interface PaletteItem {
@@ -39,6 +40,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
   onAddHost,
   onOpenSettings,
   onToggleSidebar,
+  onToggleSftp,
 }) => {
   const hosts = useAppStore((s) => s.hosts);
   const activeTabId = useAppStore((s) => s.activeTabId);
@@ -119,6 +121,19 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
     ];
 
     if (activeTabId) {
+      if (onToggleSftp) {
+        actionItems.push({
+          id: "act-toggle-sftp",
+          category: "ACTION",
+          label: "Toggle SFTP File Manager Drawer",
+          sublabel: "sftp:files",
+          shortcut: "Ctrl+Shift+E",
+          onSelect: () => {
+            onClose();
+            onToggleSftp();
+          },
+        });
+      }
       actionItems.push({
         id: "act-close-tab",
         category: "ACTION",
@@ -150,6 +165,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
     initiateConnection,
     onAddHost,
     onToggleSidebar,
+    onToggleSftp,
     toggleTheme,
     onOpenSettings,
     closeTab,

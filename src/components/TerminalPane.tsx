@@ -210,8 +210,11 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({ tab, isActive }) => 
         return false;
       }
 
-      // Allow Global App Shortcuts (Ctrl+K, Ctrl+B, Ctrl+N, Ctrl+W, Ctrl+,) to bubble up
+      // Allow Global App Shortcuts (Ctrl+K, Ctrl+B, Ctrl+N, Ctrl+W, Ctrl+,, Ctrl+Shift+E) to bubble up
       if (!ev.shiftKey && ["k", "b", "n", "w", ","].includes(key)) {
+        return false;
+      }
+      if (ev.shiftKey && key === "e") {
         return false;
       }
 

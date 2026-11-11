@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import type {
   AppSettings,
   ConnectSshRequest,
@@ -11,6 +11,8 @@ import type {
   HostKeyDecision,
   KnownHost,
   SessionInfo,
+  SftpDirectoryListing,
+  SftpTransferResult,
   SshClosedEvent,
   SshErrorEvent,
   SshOutputEvent,
@@ -72,6 +74,79 @@ export const ipc = {
     }
     return null;
   },
+
+  // SFTP file transfer & dialogs
+  sftpListDir: (sessionId: string, path?: string | null) =>
+    invoke<SftpDirectoryListing>("sftp_list_dir", {
+      sessionId,
+      path: path ?? null,
+    }),
+  sftpUploadFile: (
+    sessionId: string,
+    localPath: string,
+    remoteDir?: string | null
+  ) =>
+    invoke<SftpTransferResult>("sftp_upload_file", {
+      sessionId,
+      localPath,
+      remoteDir: remoteDir ?? null,
+    }),
+  sftpDownloadFile: (
+    sessionId: string,
+    remotePath: string,
+    localPath: string
+  ) =>
+    invoke<SftpTransferResult>("sftp_download_file", {
+      sessionId,
+      remotePath,
+      localPath,
+    }),
+  sftpCreateDir: (sessionId: string, path: string) =>
+    invoke<void>("sftp_create_dir", { sessionId, path }),
+  sftpDeleteEntry: (sessionId: string, path: string, isDir: boolean) =>
+    invoke<void>("sftp_delete_entry", { sessionId, path, isDir }),
+
+  pickLocalFilesForUpload: async (): Promise<string[]> => {
+    const selected = await open({
+      multiple: true,
+      directory: false,
+      title: "Select Local File(s) to Upload via SFTP",
+    });
+    if (Array.isArray(selected)) {
+      return selected.filter((item): item is string => typeof item === "string");
+    }
+    if (typeof selected === "string") {
+      return [selected];
+    }
+    return [];
+  },
+
+  pickLocalSavePath: async (defaultFileName: string): Promise<string | null> => {
+    const selected = await save({
+      defaultPath: defaultFileName,
+      title: "Save Remote File to PC",
+    });
+    return typeof selected === "string" ? selected : null;
+  },
+
+  onWindowDragDrop: (
+    handler: (payload: {
+      type: "enter" | "over" | "drop" | "leave";
+      paths?: string[];
+    }) => void
+  ): Promise<UnlistenFn> =>
+    listen<{ type?: string; paths?: string[] }>("tauri://drag-drop", (e) => {
+      handler({
+        type: "drop",
+        paths: e.payload.paths ?? [],
+      });
+    }),
+
+  onWindowDragEnter: (handler: () => void): Promise<UnlistenFn> =>
+    listen("tauri://drag-enter", () => handler()),
+
+  onWindowDragLeave: (handler: () => void): Promise<UnlistenFn> =>
+    listen("tauri://drag-leave", () => handler()),
 
   // Event listeners
   onSshStatus: (handler: (event: SshStatusEvent) => void): Promise<UnlistenFn> =>

@@ -10,7 +10,7 @@ use crate::db::Database;
 use crate::error::{AppError, AppResult};
 use crate::models::{
     AppSettings, ConnectSshRequest, Host, HostGroup, HostInput, HostKeyDecision, KnownHost,
-    SessionInfo,
+    SessionInfo, SftpDirectoryListing, SftpTransferResult,
 };
 use crate::ssh::SessionManager;
 
@@ -234,5 +234,64 @@ pub async fn update_settings(
     settings: AppSettings,
 ) -> AppResult<AppSettings> {
     state.db.update_settings(&settings).await
+}
+
+// ==================== SFTP FILE TRANSFER ====================
+
+#[tauri::command]
+pub async fn sftp_list_dir(
+    state: State<'_, AppState>,
+    session_id: String,
+    path: Option<String>,
+) -> AppResult<SftpDirectoryListing> {
+    state.sessions.sftp_list_dir(&session_id, path).await
+}
+
+#[tauri::command]
+pub async fn sftp_upload_file(
+    state: State<'_, AppState>,
+    session_id: String,
+    local_path: String,
+    remote_dir: Option<String>,
+) -> AppResult<SftpTransferResult> {
+    state
+        .sessions
+        .sftp_upload_file(&session_id, &local_path, remote_dir)
+        .await
+}
+
+#[tauri::command]
+pub async fn sftp_download_file(
+    state: State<'_, AppState>,
+    session_id: String,
+    remote_path: String,
+    local_path: String,
+) -> AppResult<SftpTransferResult> {
+    state
+        .sessions
+        .sftp_download_file(&session_id, &remote_path, &local_path)
+        .await
+}
+
+#[tauri::command]
+pub async fn sftp_create_dir(
+    state: State<'_, AppState>,
+    session_id: String,
+    path: String,
+) -> AppResult<()> {
+    state.sessions.sftp_create_dir(&session_id, &path).await
+}
+
+#[tauri::command]
+pub async fn sftp_delete_entry(
+    state: State<'_, AppState>,
+    session_id: String,
+    path: String,
+    is_dir: bool,
+) -> AppResult<()> {
+    state
+        .sessions
+        .sftp_delete_entry(&session_id, &path, is_dir)
+        .await
 }
 
