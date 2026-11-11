@@ -17,6 +17,7 @@ import {
 
 import { ipc } from "@/lib/ipc";
 import { formatError } from "@/lib/utils";
+import { useTranslation } from "@/lib/useTranslation";
 import type { SftpEntry } from "@/types/models";
 
 interface SftpDrawerProps {
@@ -56,6 +57,7 @@ export const SftpDrawer: React.FC<SftpDrawerProps> = ({
   onPathChange,
   externalRefreshToken,
 }) => {
+  const { t } = useTranslation();
   const [entries, setEntries] = useState<SftpEntry[]>([]);
   const [pathInput, setPathInput] = useState(currentPath || ".");
   const [loading, setLoading] = useState(false);
@@ -100,7 +102,7 @@ export const SftpDrawer: React.FC<SftpDrawerProps> = ({
       void loadDirectory(currentPath || ".");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, isConnected, sessionId, externalRefreshToken]);
+  }, [open, isConnected, sessionId, currentPath, externalRefreshToken]);
 
   if (!open) return null;
 
@@ -222,7 +224,7 @@ export const SftpDrawer: React.FC<SftpDrawerProps> = ({
             title="Upload file(s) from PC to current remote directory"
           >
             <Upload className="w-3 h-3" />
-            <span>Upload</span>
+            <span>{t("sftpUpload")}</span>
           </button>
           <button
             type="button"

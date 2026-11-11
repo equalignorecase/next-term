@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 
 import { resolveThemePreset } from "@/lib/themes";
+import { useTranslation } from "@/lib/useTranslation";
 import { useAppStore } from "@/store/useAppStore";
 import type { Host } from "@/types/models";
 
@@ -42,6 +43,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
   onToggleSidebar,
   onToggleSftp,
 }) => {
+  const { t } = useTranslation();
   const hosts = useAppStore((s) => s.hosts);
   const activeTabId = useAppStore((s) => s.activeTabId);
   const theme = useAppStore((s) => s.settings.theme);
@@ -78,7 +80,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
       {
         id: "act-new-host",
         category: "ACTION",
-        label: "New SSH Host",
+        label: t("newHost"),
         sublabel: "host:create",
         shortcut: "Ctrl+N",
         onSelect: () => {
@@ -100,7 +102,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
       {
         id: "act-toggle-theme",
         category: "ACTION",
-        label: `Toggle Theme (Current: ${resolveThemePreset(theme).name})`,
+        label: `${t("cmdToggleTheme")} (${resolveThemePreset(theme).name})`,
         sublabel: "view:theme",
         onSelect: () => {
           onClose();
@@ -110,7 +112,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
       {
         id: "act-settings",
         category: "ACTION",
-        label: "Open Settings & Known Hosts",
+        label: t("cmdOpenSettings"),
         sublabel: "config:preferences",
         shortcut: "Ctrl+,",
         onSelect: () => {
@@ -125,7 +127,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
         actionItems.push({
           id: "act-toggle-sftp",
           category: "ACTION",
-          label: "Toggle SFTP File Manager Drawer",
+          label: t("sftpTitle"),
           sublabel: "sftp:files",
           shortcut: "Ctrl+Shift+E",
           onSelect: () => {
@@ -137,7 +139,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
       actionItems.push({
         id: "act-close-tab",
         category: "ACTION",
-        label: "Disconnect & Close Active Session",
+        label: t("cmdCloseTab"),
         sublabel: "session:kill",
         shortcut: "Ctrl+W",
         onSelect: () => {
@@ -217,7 +219,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Connect to host or run command..."
+            placeholder={t("cmdPalettePlaceholder")}
             aria-label="Command palette search"
             className="flex-1 bg-transparent text-xs text-primaryText focus:outline-none placeholder:text-secondaryText/60"
           />

@@ -26,6 +26,7 @@ import type { ThemePresetId } from "@/types/models";
 interface TerminalPaneProps {
   tab: SessionTab;
   isActive: boolean;
+  onDirectoryChange?: (newPath: string) => void;
 }
 
 interface ContextMenuPosition {
@@ -41,11 +42,21 @@ export function getTerminalTheme(
   return buildTerminalTheme(mode, accentColor);
 }
 
-export const TerminalPane: React.FC<TerminalPaneProps> = ({ tab, isActive }) => {
+export const TerminalPane: React.FC<TerminalPaneProps> = ({
+  tab,
+  isActive,
+  onDirectoryChange,
+}) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const searchAddonRef = useRef<SearchAddon | null>(null);
+  const inputBufferRef = useRef<string>("");
+  const onDirectoryChangeRef = useRef(onDirectoryChange);
+
+  useEffect(() => {
+    onDirectoryChangeRef.current = onDirectoryChange;
+  }, [onDirectoryChange]);
 
   const settings = useAppStore((s) => s.settings);
   const sendInput = useAppStore((s) => s.sendInput);
@@ -143,8 +154,60 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({ tab, isActive }) => 
       }
     });
 
+    // Register OSC 7 (standard terminal current working directory report)
+    // Format: OSC 7 ; file://hostname/path ST
+    const oscDisposable = term.parser?.registerOscHandler
+      ? term.parser.registerOscHandler(7, (data: string) => {
+          try {
+            let path = data;
+            if (path.startsWith("file://")) {
+              const url = new URL(path);
+              path = decodeURIComponent(url.pathname);
+            }
+            if (path && onDirectoryChangeRef.current) {
+              onDirectoryChangeRef.current(path);
+            }
+          } catch {
+            // ignore malformed OSC 7
+          }
+          return true;
+        })
+      : { dispose: () => {} };
+
     // Forward user keystrokes to active SSH session
     const onDataDisposable = term.onData((data) => {
+      // Track command line inputs for directory changes (e.g. `cd /var/www/app`)
+      for (const char of data) {
+        if (char === "\r" || char === "\n") {
+          const trimmed = inputBufferRef.current.trim();
+          inputBufferRef.current = "";
+
+          // Match cd command: cd /path, cd ~/path, cd ..
+          const cdMatch = trimmed.match(/^cd\s+(.+)$/i);
+          if (cdMatch && cdMatch[1]) {
+            let targetPath = cdMatch[1].trim();
+            // remove surrounding quotes if any
+            if (
+              (targetPath.startsWith('"') && targetPath.endsWith('"')) ||
+              (targetPath.startsWith("'") && targetPath.endsWith("'"))
+            ) {
+              targetPath = targetPath.slice(1, -1);
+            }
+            if (targetPath && onDirectoryChangeRef.current) {
+              onDirectoryChangeRef.current(targetPath);
+            }
+          }
+        } else if (char === "\x7f" || char === "\b") {
+          // Backspace
+          inputBufferRef.current = inputBufferRef.current.slice(0, -1);
+        } else if (char === "\x03") {
+          // Ctrl+C: clear buffer
+          inputBufferRef.current = "";
+        } else if (char >= " ") {
+          inputBufferRef.current += char;
+        }
+      }
+
       void sendInput(tab.sessionId, data);
     });
 
@@ -268,6 +331,7 @@ export const TerminalPane: React.FC<TerminalPaneProps> = ({ tab, isActive }) => 
       onDataDisposable.dispose();
       onBinaryDisposable.dispose();
       onSelectionDisposable.dispose();
+      oscDisposable.dispose();
       term.dispose();
       termRef.current = null;
       fitAddonRef.current = null;

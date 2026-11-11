@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import {
+  Globe,
   Palette,
   Settings,
   ShieldCheck,
@@ -18,6 +19,7 @@ import {
 } from "@/lib/themes";
 import { appSettingsSchema } from "@/lib/validation";
 import { formatError } from "@/lib/utils";
+import { useTranslation } from "@/lib/useTranslation";
 import { useAppStore } from "@/store/useAppStore";
 import type { AppSettings, ThemePresetId } from "@/types/models";
 
@@ -30,6 +32,7 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
   open,
   onClose,
 }) => {
+  const { t } = useTranslation();
   const settings = useAppStore((s) => s.settings);
   const knownHosts = useAppStore((s) => s.knownHosts);
   const saveSettings = useAppStore((s) => s.saveSettings);
@@ -100,7 +103,7 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
               id="settings-dialog-title"
               className="text-xs font-bold uppercase tracking-wider text-primaryText"
             >
-              Settings & Trusted Host Keys
+              {t("settingsTitle")}
             </h2>
           </div>
           <button
@@ -124,7 +127,7 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
                 : "border-transparent text-secondaryText hover:text-primaryText"
             }`}
           >
-            Appearance, Terminal & SSH
+            {t("tabPreferences")}
           </button>
           <button
             type="button"
@@ -136,7 +139,7 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
             }`}
           >
             <ShieldCheck className="w-3.5 h-3.5" />
-            Trusted Known Hosts ({knownHosts.length})
+            {t("tabKnownHosts")} ({knownHosts.length})
           </button>
         </div>
 
@@ -155,6 +158,43 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
                 Settings saved and applied immediately.
               </div>
             )}
+
+            {/* SECTION 0: LANGUAGE */}
+            <section className="space-y-3">
+              <div className="flex items-center justify-between border-b border-border pb-1.5">
+                <div className="flex items-center gap-2 font-mono text-[11px] font-bold uppercase tracking-wider text-primaryText">
+                  <Globe className="w-3.5 h-3.5 text-accent" />
+                  <span>{t("sectionLanguage")}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setDraft({ ...draft, language: "en" })}
+                    className={`px-3 py-1 font-mono text-[11px] rounded-xs border transition-colors ${
+                      (draft.language || "en") === "en"
+                        ? "bg-accent/15 border-accent text-accent font-semibold"
+                        : "bg-background border-border text-secondaryText hover:text-primaryText"
+                    }`}
+                  >
+                    English
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setDraft({ ...draft, language: "th" })}
+                    className={`px-3 py-1 font-mono text-[11px] rounded-xs border transition-colors ${
+                      draft.language === "th"
+                        ? "bg-accent/15 border-accent text-accent font-semibold"
+                        : "bg-background border-border text-secondaryText hover:text-primaryText"
+                    }`}
+                  >
+                    ไทย (Thai)
+                  </button>
+                </div>
+              </div>
+              <p className="text-secondaryText text-[11px]">
+                {t("sectionLanguageDesc")}
+              </p>
+            </section>
 
             {/* SECTION 1: THEME PRESETS & ACCENT COLOR */}
             <section className="space-y-3">
@@ -739,27 +779,25 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({
                 onClick={onClose}
                 className="px-3.5 py-1.5 text-secondaryText hover:text-primaryText rounded-xs font-mono"
               >
-                Close
+                {t("close")}
               </button>
               <button
                 type="submit"
                 className="px-4 py-1.5 font-mono font-semibold bg-accent text-slate-950 hover:opacity-90 rounded-xs"
               >
-                Save Preferences
+                {t("savePreferences")}
               </button>
             </div>
           </form>
         ) : (
           <div className="p-5 space-y-3 overflow-y-auto flex-1 text-xs">
             <p className="text-secondaryText">
-              Trusted SSH server public keys stored in SQLite (`known_hosts`).
-              Revoking a key will require interactive fingerprint verification on
-              the next connection.
+              {t("knownHostsDesc")}
             </p>
 
             {knownHosts.length === 0 ? (
               <div className="p-8 text-center text-secondaryText border border-dashed border-border rounded-xs font-mono">
-                No trusted host keys recorded yet.
+                {t("noKnownHosts")}
               </div>
             ) : (
               <div className="divide-y divide-border border border-border rounded-xs bg-background">

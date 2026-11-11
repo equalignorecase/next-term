@@ -4,6 +4,7 @@ import { X, FolderOpen, KeyRound, Lock, Server } from "lucide-react";
 import { hostInputSchema } from "@/lib/validation";
 import { ipc } from "@/lib/ipc";
 import { formatError } from "@/lib/utils";
+import { useTranslation } from "@/lib/useTranslation";
 import { useAppStore } from "@/store/useAppStore";
 import type { AuthMethod, Host, HostInput } from "@/types/models";
 
@@ -18,6 +19,7 @@ export const HostDialog: React.FC<HostDialogProps> = ({
   editingHost,
   onClose,
 }) => {
+  const { t } = useTranslation();
   const groups = useAppStore((s) => s.groups);
   const defaultPort = useAppStore((s) => s.settings.defaultSshPort);
   const createHost = useAppStore((s) => s.createHost);
@@ -151,7 +153,7 @@ export const HostDialog: React.FC<HostDialogProps> = ({
               id="host-dialog-title"
               className="text-sm font-semibold text-primaryText"
             >
-              {editingHost ? "Edit SSH Host" : "New SSH Host"}
+              {editingHost ? t("editHostTitle") : t("addHostTitle")}
             </h2>
           </div>
           <button
@@ -425,7 +427,7 @@ export const HostDialog: React.FC<HostDialogProps> = ({
               onClick={onClose}
               className="px-3.5 py-1.5 text-xs font-medium text-secondaryText hover:text-primaryText rounded border border-transparent hover:border-border"
             >
-              Cancel
+              {t("cancel")}
             </button>
             <button
               type="submit"
@@ -433,10 +435,10 @@ export const HostDialog: React.FC<HostDialogProps> = ({
               className="px-4 py-1.5 text-xs font-mono font-semibold bg-accent text-slate-950 hover:bg-emerald-400 rounded-xs transition-colors disabled:opacity-50"
             >
               {isSubmitting
-                ? "Saving..."
+                ? t("loading")
                 : editingHost
-                  ? "Save Changes"
-                  : "Create Host"}
+                  ? t("save")
+                  : t("saveAndConnect")}
             </button>
           </div>
         </form>

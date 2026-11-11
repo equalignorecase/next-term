@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { ShieldAlert, ShieldQuestion, Check, X } from "lucide-react";
 
+import { useTranslation } from "@/lib/useTranslation";
 import { useAppStore } from "@/store/useAppStore";
 import type { HostKeyChallengeEvent } from "@/types/models";
 
@@ -11,6 +12,7 @@ interface HostKeyChallengeDialogProps {
 export const HostKeyChallengeDialog: React.FC<HostKeyChallengeDialogProps> = ({
   challenge,
 }) => {
+  const { t } = useTranslation();
   const resolveHostKeyChallenge = useAppStore((s) => s.resolveHostKeyChallenge);
   const [persist, setPersist] = useState(true);
   const [confirmChangedOverride, setConfirmChangedOverride] = useState(false);
@@ -155,7 +157,7 @@ export const HostKeyChallengeDialog: React.FC<HostKeyChallengeDialogProps> = ({
               className="flex items-center gap-1.5 px-4 py-1.5 rounded bg-elevated hover:bg-border text-primaryText font-semibold transition-colors"
             >
               <X className="w-3.5 h-3.5" />
-              Reject & Disconnect
+              {t("hostKeyReject")}
             </button>
 
             <button
@@ -169,7 +171,7 @@ export const HostKeyChallengeDialog: React.FC<HostKeyChallengeDialogProps> = ({
               }`}
             >
               <Check className="w-3.5 h-3.5" />
-              {isChanged ? "Replace Key & Connect" : "Trust Key & Connect"}
+              {t("hostKeyAccept")}
             </button>
           </div>
         </div>

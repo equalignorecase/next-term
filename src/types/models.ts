@@ -183,6 +183,7 @@ export interface AppSettings {
   uiDensity: "compact" | "comfortable";
   terminalType: "xterm-256color" | "xterm" | "vt100";
   defaultSshPort: number;
+  language: "en" | "th";
 }
 
 export interface ErrorPayload {

@@ -3,6 +3,7 @@ import { ipc } from "@/lib/ipc";
 import { encodeBase64 } from "@/lib/base64";
 import { resolveThemePreset } from "@/lib/themes";
 import { formatError } from "@/lib/utils";
+import { detectDefaultLanguage } from "@/lib/i18n";
 import type {
   AppSettings,
   Host,
@@ -56,6 +57,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   telemetryEnabled: true,
   telemetryIntervalSecs: 2,
   uiDensity: "compact",
+  language: detectDefaultLanguage(),
 };
 
 interface AppStore {

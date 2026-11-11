@@ -518,6 +518,28 @@ export const App: React.FC = () => {
                   key={tab.sessionId}
                   tab={tab}
                   isActive={tab.sessionId === activeTabId}
+                  onDirectoryChange={(targetPath) => {
+                    let nextPath = targetPath.trim();
+                    const current = sftpPaths[tab.sessionId] || ".";
+                    if (!nextPath.startsWith("/") && !nextPath.startsWith("~")) {
+                      // Relative path navigation (e.g. cd app or cd ..)
+                      if (nextPath === "..") {
+                        const trimmed = current.replace(/\/+$/, "");
+                        const idx = trimmed.lastIndexOf("/");
+                        nextPath = idx <= 0 ? "/" : trimmed.slice(0, idx);
+                      } else if (nextPath === ".") {
+                        nextPath = current;
+                      } else if (current === "/" || current === ".") {
+                        nextPath = current === "/" ? `/${nextPath}` : nextPath;
+                      } else {
+                        nextPath = `${current.replace(/\/+$/, "")}/${nextPath}`;
+                      }
+                    }
+                    setSftpPaths((prev) => ({
+                      ...prev,
+                      [tab.sessionId]: nextPath,
+                    }));
+                  }}
                 />
               ))
             )}

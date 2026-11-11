@@ -157,6 +157,11 @@ pub fn validate_local_transfer_path(path_str: &str) -> AppResult<()> {
             "Local file path contains null byte.".into(),
         ));
     }
+    if trimmed.split(['/', '\\']).any(|part| part == "..") {
+        return Err(AppError::Validation(
+            "Local file path must not contain parent directory traversal ('..').".into(),
+        ));
+    }
     let path = Path::new(trimmed);
     if path.components().any(|c| matches!(c, Component::ParentDir)) {
         return Err(AppError::Validation(
@@ -291,6 +296,11 @@ pub fn validate_settings(settings: &AppSettings) -> AppResult<()> {
     ) {
         return Err(AppError::Validation(
             "Terminal type must be 'xterm-256color', 'xterm', or 'vt100'.".into(),
+        ));
+    }
+    if !matches!(settings.language.as_str(), "en" | "th") {
+        return Err(AppError::Validation(
+            "Language must be 'en' or 'th'.".into(),
         ));
     }
     validate_port(settings.default_ssh_port)?;

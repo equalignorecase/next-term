@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 
 import { resolveThemePreset } from "@/lib/themes";
+import { useTranslation } from "@/lib/useTranslation";
 import { useAppStore } from "@/store/useAppStore";
 import type { Host } from "@/types/models";
 
@@ -35,6 +36,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onOpenSettings,
   onOpenPalette,
 }) => {
+  const { t } = useTranslation();
   const hosts = useAppStore((s) => s.hosts);
   const groups = useAppStore((s) => s.groups);
   const tabs = useAppStore((s) => s.tabs);
@@ -149,7 +151,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Filter hosts..."
+            placeholder={t("searchHosts")}
             aria-label="Search hosts"
             className="w-full pl-7 pr-6 py-1 text-xs font-mono bg-background border border-border rounded-xs focus:outline-none focus:border-accent text-primaryText placeholder:text-secondaryText/50"
           />
@@ -399,7 +401,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         >
           <span className="flex items-center gap-2">
             <Settings className="w-3.5 h-3.5 text-accent" />
-            <span>Settings & Known Hosts</span>
+            <span>{t("settings")}</span>
           </span>
           <kbd className="text-[10px] px-1 bg-background border border-border rounded-xs">
             Ctrl+,

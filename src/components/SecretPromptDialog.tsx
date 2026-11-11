@@ -1,9 +1,11 @@
 import React, { useState } from "react";
 import { KeyRound, Lock, X } from "lucide-react";
 
+import { useTranslation } from "@/lib/useTranslation";
 import { useAppStore } from "@/store/useAppStore";
 
 export const SecretPromptDialog: React.FC = () => {
+  const { t } = useTranslation();
   const secretPrompt = useAppStore((s) => s.secretPrompt);
   const closeSecretPrompt = useAppStore((s) => s.closeSecretPrompt);
   const initiateConnection = useAppStore((s) => s.initiateConnection);
@@ -49,8 +51,8 @@ export const SecretPromptDialog: React.FC = () => {
               className="text-sm font-semibold text-primaryText"
             >
               {isPassphrase
-                ? "Encrypted Key Passphrase Required"
-                : "SSH Password Authentication"}
+                ? t("secretPromptPassphraseTitle")
+                : t("secretPromptPasswordTitle")}
             </h2>
           </div>
           <button
@@ -105,14 +107,14 @@ export const SecretPromptDialog: React.FC = () => {
               onClick={closeSecretPrompt}
               className="px-3.5 py-1.5 text-xs text-secondaryText hover:text-primaryText rounded"
             >
-              Cancel
+              {t("cancel")}
             </button>
             <button
               type="submit"
               disabled={!secret}
               className="px-4 py-1.5 text-xs font-mono font-semibold bg-accent text-slate-950 hover:bg-emerald-400 rounded-xs disabled:opacity-40"
             >
-              Authenticate
+              {t("secretPromptSubmit")}
             </button>
           </div>
         </form>

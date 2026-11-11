@@ -283,6 +283,7 @@ pub struct AppSettings {
     pub ui_density: String,
     pub terminal_type: String,
     pub default_ssh_port: u16,
+    pub language: String,
 }
 
 impl Default for AppSettings {
@@ -307,6 +308,7 @@ impl Default for AppSettings {
             ui_density: "compact".to_string(),
             terminal_type: "xterm-256color".to_string(),
             default_ssh_port: 22,
+            language: "en".to_string(),
         }
     }
 }

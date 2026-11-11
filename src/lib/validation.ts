@@ -98,5 +98,6 @@ export const appSettingsSchema = z.object({
   telemetryEnabled: z.boolean(),
   telemetryIntervalSecs: z.number().int().min(1).max(30),
   uiDensity: z.enum(["compact", "comfortable"]),
+  language: z.enum(["en", "th"]),
 });
 
